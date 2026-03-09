@@ -3,11 +3,12 @@ from __future__ import annotations
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
+from threading import Event, Thread, current_thread
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.timer import Timer
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Select, Static, TabPane, TabbedContent
 from textual.worker import WorkerState
 
@@ -21,22 +22,12 @@ from .models import (
     SessionSnapshot,
 )
 from .service import FastF1Service
-from .widgets import render_driver_panels, render_summary
+from .widgets import render_driver_panel, render_summary
 
 
 class F1TimingApp(App[None]):
     CSS_PATH = "app.tcss"
-    DEFAULT_REFRESH_INTERVAL = 90
     DEFAULT_TEAM_DISPLAY_MODE = "names"
-    REFRESH_INTERVAL_OPTIONS = [
-        ("Manual only", 0),
-        ("5 seconds", 5),
-        ("10 seconds", 10),
-        ("30 seconds", 30),
-        ("60 seconds", 60),
-        ("90 seconds", 90),
-        ("180 seconds", 180),
-    ]
     TEAM_DISPLAY_OPTIONS = [
         ("Team names", "names"),
         ("Color swatches", "colors"),
@@ -50,18 +41,26 @@ class F1TimingApp(App[None]):
 
     LOADING_VALUE = "__loading__"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        service: FastF1Service | None = None,
+        *,
+        enable_live_current: bool = True,
+    ) -> None:
         super().__init__()
-        self.service = FastF1Service()
+        self.service = service or FastF1Service()
+        self.enable_live_current = enable_live_current
         self.year_options = [(str(year), year) for year in self.service.available_years()]
-        self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL
         self.team_display_mode = self.DEFAULT_TEAM_DISPLAY_MODE
         self.current_context: CurrentContext | None = None
         self.history_events: dict[str, EventOption] = {}
         self.history_sessions: dict[str, SessionSelection] = {}
         self.current_snapshot: SessionSnapshot | None = None
         self.history_snapshot: SessionSnapshot | None = None
-        self._current_refresh_timer: Timer | None = None
+        self._current_live_thread: Thread | None = None
+        self._current_live_stop: Event | None = None
+        self._live_status_message: str | None = None
+        self._transient_status_message: str | None = None
         self._history_syncing = False
         self._bootstrapping = True
         self._current_ready = False
@@ -73,9 +72,8 @@ class F1TimingApp(App[None]):
             with TabPane("Current", id="current"):
                 with Vertical(id="current-view"):
                     yield Static("Loading current session...", id="current-summary")
-                    with Horizontal(id="current-panels"):
-                        yield Static("Loading...", id="current-left")
-                        yield Static("Loading...", id="current-right")
+                    with VerticalScroll(id="current-drivers-scroll"):
+                        yield Static("Loading...", id="current-drivers")
             with TabPane("History", id="history"):
                 with Vertical(id="history-view"):
                     with Horizontal(id="history-controls"):
@@ -101,20 +99,12 @@ class F1TimingApp(App[None]):
                             id="history-session",
                         )
                     yield Static("Loading history session...", id="history-summary")
-                    with Horizontal(id="history-panels"):
-                        yield Static("Loading...", id="history-left")
-                        yield Static("Loading...", id="history-right")
+                    with VerticalScroll(id="history-drivers-scroll"):
+                        yield Static("Loading...", id="history-drivers")
             with TabPane("Settings", id="settings"):
                 with Vertical(id="settings-view"):
                     yield Static("", id="settings-summary")
                     with Horizontal(id="settings-controls"):
-                        yield Select(
-                            self.REFRESH_INTERVAL_OPTIONS,
-                            prompt="Current Auto-refresh",
-                            allow_blank=False,
-                            value=self.refresh_interval_seconds,
-                            id="settings-refresh-interval",
-                        )
                         yield Select(
                             self.TEAM_DISPLAY_OPTIONS,
                             prompt="Team Display",
@@ -127,6 +117,9 @@ class F1TimingApp(App[None]):
     def on_mount(self) -> None:
         self.title = "mof1"
         self._set_status(None)
+        self.query_one("#settings-summary", Static).update(
+            self._refresh_settings_text(team_display_mode=self.team_display_mode)
+        )
 
         self._render_message(
             "current",
@@ -147,7 +140,13 @@ class F1TimingApp(App[None]):
             exclusive=True,
             exit_on_error=False,
         )
-        self._apply_refresh_interval(self.refresh_interval_seconds)
+
+    def on_unmount(self) -> None:
+        self._stop_current_live_feed(clear_status=True)
+
+    def action_quit(self) -> None:
+        self._stop_current_live_feed(clear_status=True)
+        self.exit()
 
     def action_refresh_current(self) -> None:
         self._start_current_refresh(manual=True)
@@ -168,10 +167,6 @@ class F1TimingApp(App[None]):
         )
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "settings-refresh-interval":
-            if isinstance(event.value, int):
-                self._apply_refresh_interval(event.value, notify=True)
-            return
         if event.select.id == "settings-team-display":
             if isinstance(event.value, str):
                 self._apply_team_display_mode(event.value, notify=True)
@@ -307,6 +302,10 @@ class F1TimingApp(App[None]):
         )
 
     def _start_current_refresh(self, *, manual: bool = False) -> None:
+        if self.enable_live_current:
+            self._restart_current_live_feed(manual=manual)
+            return
+
         context = self.service.current_context()
         self.current_context = context
         note = context.note if not manual else f"{context.note} Manual refresh at {datetime.now(UTC).strftime('%H:%M:%S')} UTC."
@@ -328,9 +327,6 @@ class F1TimingApp(App[None]):
             exclusive=True,
             exit_on_error=False,
         )
-
-    def _poll_current_refresh(self) -> None:
-        self._start_current_refresh(manual=False)
 
     def _apply_bootstrap(self, payload: BootstrapPayload) -> None:
         self.current_context = payload.current_context
@@ -359,11 +355,12 @@ class F1TimingApp(App[None]):
 
         self._bootstrapping = False
         self._apply_history_snapshot(payload.history_snapshot)
+        if self.enable_live_current:
+            self._restart_current_live_feed(manual=False)
 
     def _apply_current_snapshot(self, snapshot: SessionSnapshot) -> None:
         self._current_ready = True
         self.current_snapshot = snapshot
-        self._set_status(None)
         self._render_snapshot("current", snapshot)
         self._set_driver_loading("current", False)
 
@@ -450,43 +447,24 @@ class F1TimingApp(App[None]):
 
     def _render_message(self, target: str, message: str) -> None:
         summary = self.query_one(f"#{target}-summary", Static)
-        left = self.query_one(f"#{target}-left", Static)
-        right = self.query_one(f"#{target}-right", Static)
+        drivers = self.query_one(f"#{target}-drivers", Static)
         summary.update(message)
-        left.update(message)
-        right.update(message)
+        drivers.update(message)
 
     def _set_status(self, message: str | None) -> None:
+        self._transient_status_message = message
+        self._refresh_sub_title()
+
+    def _set_live_status(self, message: str | None) -> None:
+        self._live_status_message = message
+        self._refresh_sub_title()
+
+    def _refresh_sub_title(self) -> None:
+        message = self._transient_status_message or self._live_status_message
         self.sub_title = "mof1" if not message else f"mof1 | {message}"
 
     def _set_driver_loading(self, target: str, loading: bool) -> None:
-        self.query_one(f"#{target}-left", Static).loading = loading
-        self.query_one(f"#{target}-right", Static).loading = loading
-
-    def _apply_refresh_interval(self, seconds: int, *, notify: bool = False) -> None:
-        self.refresh_interval_seconds = seconds
-        if self._current_refresh_timer is not None:
-            self._current_refresh_timer.stop()
-            self._current_refresh_timer = None
-
-        if seconds > 0:
-            self._current_refresh_timer = self.set_interval(
-                seconds,
-                self._poll_current_refresh,
-                name="current-refresh-interval",
-            )
-
-        self.query_one("#settings-summary", Static).update(
-            self._refresh_settings_text(
-                seconds,
-                team_display_mode=self.team_display_mode,
-            )
-        )
-        if notify:
-            self.notify(
-                f"Current auto-refresh: {self._refresh_interval_label(seconds)}",
-                severity="information",
-            )
+        self.query_one(f"#{target}-drivers-scroll", VerticalScroll).loading = loading
 
     def _apply_team_display_mode(self, mode: str, *, notify: bool = False) -> None:
         if mode not in {"names", "colors"}:
@@ -495,7 +473,6 @@ class F1TimingApp(App[None]):
         self.team_display_mode = mode
         self.query_one("#settings-summary", Static).update(
             self._refresh_settings_text(
-                self.refresh_interval_seconds,
                 team_display_mode=self.team_display_mode,
             )
         )
@@ -518,16 +495,16 @@ class F1TimingApp(App[None]):
     @classmethod
     def _refresh_settings_text(
         cls,
-        seconds: int,
+        seconds: int | None = None,
         *,
         team_display_mode: str = DEFAULT_TEAM_DISPLAY_MODE,
     ) -> str:
         team_display = cls._team_display_label(team_display_mode)
         return (
-            f"Current tab refreshes {cls._refresh_interval_label(seconds)}.\n"
+            "Current tab uses the anonymous F1 live timing feed.\n"
             f"Driver column uses {team_display}.\n"
             "History stays manual and shows the loading indicator while it fetches.\n"
-            "Use `r` for current and `Shift+R` for history."
+            "Use `r` to reconnect current and `Shift+R` for history."
         )
 
     @staticmethod
@@ -541,22 +518,92 @@ class F1TimingApp(App[None]):
             self._render_snapshot("history", self.history_snapshot)
 
     def _render_snapshot(self, target: str, snapshot: SessionSnapshot) -> None:
-        left_widget = self.query_one(f"#{target}-left", Static)
-        right_widget = self.query_one(f"#{target}-right", Static)
+        drivers_widget = self.query_one(f"#{target}-drivers", Static)
         self.query_one(f"#{target}-summary", Static).update(render_summary(snapshot))
-        panel_width = left_widget.size.width or max(1, self.size.width // 2 - 4)
+        panel_width = drivers_widget.size.width or max(1, self.size.width - 8)
         compact = self._use_compact_driver_layout(panel_width)
-        left_panel, right_panel = render_driver_panels(
+        driver_panel = render_driver_panel(
             snapshot,
+            panel_width=panel_width,
             compact=compact,
             team_display_mode=self.team_display_mode,
         )
-        left_widget.update(left_panel)
-        right_widget.update(right_panel)
+        drivers_widget.update(driver_panel)
 
     @staticmethod
     def _use_compact_driver_layout(panel_width: int) -> bool:
         return panel_width != 0 and panel_width < 84
+
+    def _restart_current_live_feed(self, *, manual: bool) -> None:
+        self._stop_current_live_feed(clear_status=False)
+
+        if not self._current_ready:
+            self._set_driver_loading("current", True)
+
+        self._set_live_status(
+            "Reconnecting current live feed..." if manual else "Connecting current live feed..."
+        )
+        stop_event = Event()
+        thread = Thread(
+            target=self._run_current_live_feed,
+            args=(stop_event,),
+            name="mof1-current-live",
+            daemon=True,
+        )
+        self._current_live_stop = stop_event
+        self._current_live_thread = thread
+        thread.start()
+
+    def _stop_current_live_feed(self, *, clear_status: bool) -> None:
+        stop_event = self._current_live_stop
+        thread = self._current_live_thread
+        self._current_live_stop = None
+        self._current_live_thread = None
+
+        if stop_event is not None:
+            stop_event.set()
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not current_thread()
+        ):
+            thread.join(timeout=2.0)
+
+        if clear_status:
+            self._set_live_status(None)
+
+    def _run_current_live_feed(self, stop_event: Event) -> None:
+        def on_snapshot(snapshot: SessionSnapshot) -> None:
+            self._call_from_live_thread(self._apply_current_snapshot, snapshot)
+
+        def on_status(message: str | None) -> None:
+            self._call_from_live_thread(self._set_live_status, message)
+
+        try:
+            self.service.run_live_timing(
+                stop_event,
+                on_snapshot=on_snapshot,
+                on_status=on_status,
+            )
+        except Exception as exc:
+            if stop_event.is_set():
+                return
+            self._call_from_live_thread(
+                self._handle_current_live_runtime_error,
+                str(exc),
+            )
+
+    def _call_from_live_thread(self, callback: Any, *args: Any) -> None:
+        try:
+            self.call_from_thread(callback, *args)
+        except RuntimeError:
+            pass
+
+    def _handle_current_live_runtime_error(self, message: str) -> None:
+        self._set_live_status(f"Current live feed unavailable: {message}")
+        if self.current_snapshot is None and not self._current_ready:
+            self._render_message("current", message)
+            self._set_driver_loading("current", False)
 
 
 def main() -> None:

@@ -49,6 +49,12 @@ class DriverSnapshot:
     current_lap_status: str
     best_lap_status: str
     status: str
+    current_tyre: str = "-"
+    current_tyre_new: bool | None = None
+    current_tyre_laps: int | None = None
+    used_tyre_sets: int | None = None
+    used_tyre_compounds: tuple[str, ...] = ()
+    used_tyre_stints: tuple[tuple[str, int | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,3 +146,12 @@ def split_drivers(drivers: Iterable[DriverSnapshot]) -> tuple[list[DriverSnapsho
     driver_list = list(drivers)
     midpoint = (len(driver_list) + 1) // 2
     return driver_list[:midpoint], driver_list[midpoint:]
+
+
+def uses_fastest_lap_order(session_name: str) -> bool:
+    normalized = session_name.lower()
+    return (
+        "practice" in normalized
+        or "qualifying" in normalized
+        or "sprint" in normalized
+    )

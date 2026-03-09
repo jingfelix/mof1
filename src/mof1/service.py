@@ -5,6 +5,7 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import fastf1
@@ -13,6 +14,7 @@ import fastf1.req as fastf1_req
 import pandas as pd
 from platformdirs import user_cache_dir
 
+from .live import LiveTimingStream
 from .models import (
     CurrentContext,
     DriverSnapshot,
@@ -22,6 +24,7 @@ from .models import (
     coerce_utc_datetime,
     format_datetime_utc,
     format_timedelta,
+    uses_fastest_lap_order,
 )
 
 
@@ -270,6 +273,19 @@ class FastF1Service:
             next_session=next_session,
             badge=badge,
             note=note,
+        )
+
+    def run_live_timing(
+        self,
+        stop_event: Event,
+        *,
+        on_snapshot: Any,
+        on_status: Any = None,
+    ) -> None:
+        LiveTimingStream().run(
+            stop_event,
+            on_snapshot=on_snapshot,
+            on_status=on_status,
         )
 
     def load_session_snapshot(
@@ -893,12 +909,7 @@ class FastF1Service:
 
     @staticmethod
     def _uses_fastest_lap_order(session_name: str) -> bool:
-        normalized = session_name.lower()
-        return (
-            "practice" in normalized
-            or "qualifying" in normalized
-            or "sprint" in normalized
-        )
+        return uses_fastest_lap_order(session_name)
 
     @staticmethod
     def _coerce_int(value: Any) -> int | None:

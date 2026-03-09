@@ -43,22 +43,19 @@ TabbedContent {
 
 #current-summary,
 #history-summary {
-    height: 8;
+    height: auto;
     margin-bottom: 1;
 }
 
-#current-panels,
-#history-panels {
+#current-drivers-scroll,
+#history-drivers-scroll {
     height: 1fr;
-}
-
-#current-left,
-#current-right,
-#history-left,
-#history-right {
-    width: 1fr;
-    height: 1fr;
-    margin-right: 1;
     border: round #3a4a53;
     padding: 0;
+}
+
+#current-drivers,
+#history-drivers {
+    width: 1fr;
+    height: auto;
 }
