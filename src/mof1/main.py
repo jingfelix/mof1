@@ -264,7 +264,8 @@ class F1TimingApp(App[None]):
         context = self.service.current_context()
         self.current_context = context
         note = context.note if not manual else f"{context.note} Manual refresh at {datetime.now(UTC).strftime('%H:%M:%S')} UTC."
-        self._set_driver_loading("current", True)
+        if not self._current_ready:
+            self._set_driver_loading("current", True)
         self._set_status(
             f"Refreshing current: {context.target.event_name} {context.target.session_name}"
         )
@@ -317,10 +318,7 @@ class F1TimingApp(App[None]):
         self._current_ready = True
         self.current_snapshot = snapshot
         self._set_status(None)
-        left_panel, right_panel = render_driver_panels(snapshot)
-        self.query_one("#current-summary", Static).update(render_summary(snapshot))
-        self.query_one("#current-left", Static).update(left_panel)
-        self.query_one("#current-right", Static).update(right_panel)
+        self._render_snapshot("current", snapshot)
         self._set_driver_loading("current", False)
 
     def _apply_history_catalog(self, payload: HistoryCatalogPayload) -> None:
@@ -366,10 +364,7 @@ class F1TimingApp(App[None]):
         self._history_ready = True
         self.history_snapshot = snapshot
         self._set_status(None)
-        left_panel, right_panel = render_driver_panels(snapshot)
-        self.query_one("#history-summary", Static).update(render_summary(snapshot))
-        self.query_one("#history-left", Static).update(left_panel)
-        self.query_one("#history-right", Static).update(right_panel)
+        self._render_snapshot("history", snapshot)
         self._set_driver_loading("history", False)
 
     def _selected_history_session(self) -> SessionSelection | None:
@@ -421,6 +416,26 @@ class F1TimingApp(App[None]):
     def _set_driver_loading(self, target: str, loading: bool) -> None:
         self.query_one(f"#{target}-left", Static).loading = loading
         self.query_one(f"#{target}-right", Static).loading = loading
+
+    def on_resize(self) -> None:
+        if self.current_snapshot is not None:
+            self._render_snapshot("current", self.current_snapshot)
+        if self.history_snapshot is not None:
+            self._render_snapshot("history", self.history_snapshot)
+
+    def _render_snapshot(self, target: str, snapshot: SessionSnapshot) -> None:
+        left_widget = self.query_one(f"#{target}-left", Static)
+        right_widget = self.query_one(f"#{target}-right", Static)
+        self.query_one(f"#{target}-summary", Static).update(render_summary(snapshot))
+        panel_width = left_widget.size.width or max(1, self.size.width // 2 - 4)
+        compact = self._use_compact_driver_layout(panel_width)
+        left_panel, right_panel = render_driver_panels(snapshot, compact=compact)
+        left_widget.update(left_panel)
+        right_widget.update(right_panel)
+
+    @staticmethod
+    def _use_compact_driver_layout(panel_width: int) -> bool:
+        return panel_width != 0 and panel_width < 84
 
 
 def main() -> None:

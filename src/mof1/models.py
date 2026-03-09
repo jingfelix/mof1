@@ -42,6 +42,12 @@ class DriverSnapshot:
     team: str
     current_lap: str
     best_lap: str
+    current_sectors: tuple[str, str, str]
+    best_sectors: tuple[str, str, str]
+    current_sector_statuses: tuple[str, str, str]
+    best_sector_statuses: tuple[str, str, str]
+    current_lap_status: str
+    best_lap_status: str
     status: str
 
 
