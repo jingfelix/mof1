@@ -1,0 +1,46 @@
+Screen {
+    background: #101417;
+    color: #f5f5f5;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+#current-view,
+#history-view {
+    height: 1fr;
+    padding: 1 2;
+}
+
+#history-controls {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#history-controls Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#current-summary,
+#history-summary {
+    height: 8;
+    margin-bottom: 1;
+}
+
+#current-panels,
+#history-panels {
+    height: 1fr;
+}
+
+#current-left,
+#current-right,
+#history-left,
+#history-right {
+    width: 1fr;
+    height: 1fr;
+    margin-right: 1;
+    border: round #3a4a53;
+    padding: 0;
+}
