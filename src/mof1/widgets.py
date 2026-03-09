@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import re
+
 from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from .models import DriverSnapshot, SessionSnapshot, split_drivers
+
+
+TEAM_COLOR_MAP: dict[str, tuple[str, ...]] = {
+    "mclaren": ("#FF8000",),
+    "ferrari": ("#FF2800",),
+    "mercedes": ("#00A19B",),
+    "red bull racing": ("#1E41FF",),
+    "williams": ("#005AFF",),
+    "racing bulls": ("#FFFFFF", "#1F5BFF"),
+    "audi": ("#8A8D8F", "#D5001C"),
+    "alpine": ("#0050FF", "#FF4FA3"),
+    "cadillac": ("#111111", "#FFFFFF"),
+    "aston martin": ("#00665E",),
+    "haas": ("#E10600",),
+}
 
 
 def render_summary(snapshot: SessionSnapshot) -> Panel:
@@ -22,6 +39,7 @@ def render_driver_panels(
     snapshot: SessionSnapshot,
     *,
     compact: bool = False,
+    team_display_mode: str = "names",
 ) -> tuple[Panel, Panel]:
     left_drivers, right_drivers = split_drivers(snapshot.drivers)
     return (
@@ -30,12 +48,14 @@ def render_driver_panels(
             left_drivers,
             snapshot.error,
             compact=compact,
+            team_display_mode=team_display_mode,
         ),
         _render_driver_panel(
             _panel_title(right_drivers, "Right Column"),
             right_drivers,
             snapshot.error,
             compact=compact,
+            team_display_mode=team_display_mode,
         ),
     )
 
@@ -46,6 +66,7 @@ def _render_driver_panel(
     error: str | None,
     *,
     compact: bool,
+    team_display_mode: str,
 ) -> Panel:
     table = Table(expand=True, box=None, pad_edge=False)
     table.add_column("Pos", justify="right", width=3, style="bold white", no_wrap=True)
@@ -66,15 +87,19 @@ def _render_driver_panel(
         for driver in drivers:
             position = str(driver.position) if driver.position is not None else "-"
             if compact:
-                table.add_row(position, _compact_entry(driver))
+                table.add_row(position, _compact_entry(driver, team_display_mode=team_display_mode))
             else:
-                table.add_row(position, _driver_identity(driver), _timing_block(driver))
+                table.add_row(
+                    position,
+                    _driver_identity(driver, team_display_mode=team_display_mode),
+                    _timing_block(driver),
+                )
 
     return Panel(Group(table, _legend()), title=title, border_style="white")
 
 
-def _compact_entry(driver: DriverSnapshot) -> Text:
-    content = _driver_identity(driver, team_width=28)
+def _compact_entry(driver: DriverSnapshot, *, team_display_mode: str) -> Text:
+    content = _driver_identity(driver, team_display_mode=team_display_mode, team_width=28)
     content.append("\n")
     content.append_text(
         _timing_line(
@@ -98,11 +123,23 @@ def _compact_entry(driver: DriverSnapshot) -> Text:
     return content
 
 
-def _driver_identity(driver: DriverSnapshot, *, team_width: int = 17) -> Text:
+def _driver_identity(
+    driver: DriverSnapshot,
+    *,
+    team_display_mode: str,
+    team_width: int = 17,
+) -> Text:
     line = Text()
     line.append(driver.code, style="bold cyan")
     line.append("  ")
-    line.append(_shorten(driver.team, team_width), style="white")
+    if team_display_mode == "colors":
+        colors = _team_colors(driver.team)
+        if colors:
+            line.append_text(_team_swatches(colors))
+        else:
+            line.append(_shorten(driver.team, team_width), style="dim")
+    else:
+        line.append(_shorten(driver.team, team_width), style="white")
     return line
 
 
@@ -183,3 +220,50 @@ def _panel_title(drivers: list[DriverSnapshot], fallback: str) -> str:
     if not positions:
         return fallback
     return f"Positions {min(positions)}-{max(positions)}"
+
+
+def _team_colors(team: str) -> tuple[str, ...]:
+    normalized = re.sub(r"[^a-z0-9]+", " ", team.lower()).strip()
+    if not normalized:
+        return ()
+
+    if (
+        "racing bulls" in normalized
+        or normalized == "rb"
+        or normalized.startswith("rb ")
+        or "visa cash app" in normalized
+        or "alphatauri" in normalized
+    ):
+        return TEAM_COLOR_MAP["racing bulls"]
+    if "red bull" in normalized:
+        return TEAM_COLOR_MAP["red bull racing"]
+    if any(alias in normalized for alias in ("audi", "sauber", "kick", "stake")):
+        return TEAM_COLOR_MAP["audi"]
+    if "aston martin" in normalized:
+        return TEAM_COLOR_MAP["aston martin"]
+    if "mclaren" in normalized:
+        return TEAM_COLOR_MAP["mclaren"]
+    if "ferrari" in normalized:
+        return TEAM_COLOR_MAP["ferrari"]
+    if "mercedes" in normalized:
+        return TEAM_COLOR_MAP["mercedes"]
+    if "williams" in normalized:
+        return TEAM_COLOR_MAP["williams"]
+    if "alpine" in normalized:
+        return TEAM_COLOR_MAP["alpine"]
+    if "cadillac" in normalized:
+        return TEAM_COLOR_MAP["cadillac"]
+    if "haas" in normalized:
+        return TEAM_COLOR_MAP["haas"]
+    return ()
+
+
+def _team_swatches(colors: tuple[str, ...]) -> Text:
+    swatches = Text()
+    if len(colors) == 1:
+        swatches.append("  ", style=f"on {colors[0]}")
+        return swatches
+
+    for color in colors:
+        swatches.append(" ", style=f"on {color}")
+    return swatches

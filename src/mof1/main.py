@@ -7,6 +7,7 @@ from functools import partial
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widgets import Footer, Header, Select, Static, TabPane, TabbedContent
 from textual.worker import WorkerState
 
@@ -25,6 +26,21 @@ from .widgets import render_driver_panels, render_summary
 
 class F1TimingApp(App[None]):
     CSS_PATH = "app.tcss"
+    DEFAULT_REFRESH_INTERVAL = 90
+    DEFAULT_TEAM_DISPLAY_MODE = "names"
+    REFRESH_INTERVAL_OPTIONS = [
+        ("Manual only", 0),
+        ("5 seconds", 5),
+        ("10 seconds", 10),
+        ("30 seconds", 30),
+        ("60 seconds", 60),
+        ("90 seconds", 90),
+        ("180 seconds", 180),
+    ]
+    TEAM_DISPLAY_OPTIONS = [
+        ("Team names", "names"),
+        ("Color swatches", "colors"),
+    ]
     BINDINGS = [
         Binding("r", "refresh_current", "Refresh Current"),
         Binding("shift+r", "refresh_history", "Refresh History"),
@@ -38,11 +54,14 @@ class F1TimingApp(App[None]):
         super().__init__()
         self.service = FastF1Service()
         self.year_options = [(str(year), year) for year in self.service.available_years()]
+        self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL
+        self.team_display_mode = self.DEFAULT_TEAM_DISPLAY_MODE
         self.current_context: CurrentContext | None = None
         self.history_events: dict[str, EventOption] = {}
         self.history_sessions: dict[str, SessionSelection] = {}
         self.current_snapshot: SessionSnapshot | None = None
         self.history_snapshot: SessionSnapshot | None = None
+        self._current_refresh_timer: Timer | None = None
         self._history_syncing = False
         self._bootstrapping = True
         self._current_ready = False
@@ -85,6 +104,24 @@ class F1TimingApp(App[None]):
                     with Horizontal(id="history-panels"):
                         yield Static("Loading...", id="history-left")
                         yield Static("Loading...", id="history-right")
+            with TabPane("Settings", id="settings"):
+                with Vertical(id="settings-view"):
+                    yield Static("", id="settings-summary")
+                    with Horizontal(id="settings-controls"):
+                        yield Select(
+                            self.REFRESH_INTERVAL_OPTIONS,
+                            prompt="Current Auto-refresh",
+                            allow_blank=False,
+                            value=self.refresh_interval_seconds,
+                            id="settings-refresh-interval",
+                        )
+                        yield Select(
+                            self.TEAM_DISPLAY_OPTIONS,
+                            prompt="Team Display",
+                            allow_blank=False,
+                            value=self.team_display_mode,
+                            id="settings-team-display",
+                        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -110,7 +147,7 @@ class F1TimingApp(App[None]):
             exclusive=True,
             exit_on_error=False,
         )
-        self.set_interval(90, self._poll_current_refresh)
+        self._apply_refresh_interval(self.refresh_interval_seconds)
 
     def action_refresh_current(self) -> None:
         self._start_current_refresh(manual=True)
@@ -131,6 +168,15 @@ class F1TimingApp(App[None]):
         )
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "settings-refresh-interval":
+            if isinstance(event.value, int):
+                self._apply_refresh_interval(event.value, notify=True)
+            return
+        if event.select.id == "settings-team-display":
+            if isinstance(event.value, str):
+                self._apply_team_display_mode(event.value, notify=True)
+            return
+
         if self._history_syncing or self._bootstrapping:
             return
 
@@ -417,6 +463,77 @@ class F1TimingApp(App[None]):
         self.query_one(f"#{target}-left", Static).loading = loading
         self.query_one(f"#{target}-right", Static).loading = loading
 
+    def _apply_refresh_interval(self, seconds: int, *, notify: bool = False) -> None:
+        self.refresh_interval_seconds = seconds
+        if self._current_refresh_timer is not None:
+            self._current_refresh_timer.stop()
+            self._current_refresh_timer = None
+
+        if seconds > 0:
+            self._current_refresh_timer = self.set_interval(
+                seconds,
+                self._poll_current_refresh,
+                name="current-refresh-interval",
+            )
+
+        self.query_one("#settings-summary", Static).update(
+            self._refresh_settings_text(
+                seconds,
+                team_display_mode=self.team_display_mode,
+            )
+        )
+        if notify:
+            self.notify(
+                f"Current auto-refresh: {self._refresh_interval_label(seconds)}",
+                severity="information",
+            )
+
+    def _apply_team_display_mode(self, mode: str, *, notify: bool = False) -> None:
+        if mode not in {"names", "colors"}:
+            return
+
+        self.team_display_mode = mode
+        self.query_one("#settings-summary", Static).update(
+            self._refresh_settings_text(
+                self.refresh_interval_seconds,
+                team_display_mode=self.team_display_mode,
+            )
+        )
+        if self.current_snapshot is not None:
+            self._render_snapshot("current", self.current_snapshot)
+        if self.history_snapshot is not None:
+            self._render_snapshot("history", self.history_snapshot)
+        if notify:
+            self.notify(
+                f"Team display: {self._team_display_label(mode)}",
+                severity="information",
+            )
+
+    @staticmethod
+    def _refresh_interval_label(seconds: int) -> str:
+        if seconds <= 0:
+            return "manual only"
+        return f"every {seconds} seconds"
+
+    @classmethod
+    def _refresh_settings_text(
+        cls,
+        seconds: int,
+        *,
+        team_display_mode: str = DEFAULT_TEAM_DISPLAY_MODE,
+    ) -> str:
+        team_display = cls._team_display_label(team_display_mode)
+        return (
+            f"Current tab refreshes {cls._refresh_interval_label(seconds)}.\n"
+            f"Driver column uses {team_display}.\n"
+            "History stays manual and shows the loading indicator while it fetches.\n"
+            "Use `r` for current and `Shift+R` for history."
+        )
+
+    @staticmethod
+    def _team_display_label(mode: str) -> str:
+        return "color swatches" if mode == "colors" else "team names"
+
     def on_resize(self) -> None:
         if self.current_snapshot is not None:
             self._render_snapshot("current", self.current_snapshot)
@@ -429,7 +546,11 @@ class F1TimingApp(App[None]):
         self.query_one(f"#{target}-summary", Static).update(render_summary(snapshot))
         panel_width = left_widget.size.width or max(1, self.size.width // 2 - 4)
         compact = self._use_compact_driver_layout(panel_width)
-        left_panel, right_panel = render_driver_panels(snapshot, compact=compact)
+        left_panel, right_panel = render_driver_panels(
+            snapshot,
+            compact=compact,
+            team_display_mode=self.team_display_mode,
+        )
         left_widget.update(left_panel)
         right_widget.update(right_panel)
 

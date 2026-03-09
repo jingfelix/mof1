@@ -8,7 +8,8 @@ TabbedContent {
 }
 
 #current-view,
-#history-view {
+#history-view,
+#settings-view {
     height: 1fr;
     padding: 1 2;
 }
@@ -19,6 +20,23 @@ TabbedContent {
 }
 
 #history-controls Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#settings-summary {
+    height: 5;
+    margin-bottom: 1;
+    padding: 1 2;
+    border: round #3a4a53;
+    background: #161d22;
+}
+
+#settings-controls {
+    height: auto;
+}
+
+#settings-controls Select {
     width: 1fr;
     margin-right: 1;
 }
