@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check exported requirements
+        run: |
+          uv export --frozen --format requirements.txt --no-hashes --no-dev --no-emit-project --output-file /tmp/requirements.txt
+          diff -u requirements.txt /tmp/requirements.txt
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run ty check
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Compile sources
+        run: uv run python -m compileall src tests
