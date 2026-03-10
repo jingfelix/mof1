@@ -35,8 +35,8 @@ jobs:
 
       - name: Check exported requirements
         run: |
-          uv export --frozen --format requirements.txt --no-hashes --no-dev --no-emit-project --output-file /tmp/requirements.txt
-          diff -u requirements.txt /tmp/requirements.txt
+          uv export --frozen --format requirements.txt --no-hashes --no-dev --no-emit-project --output-file requirements.txt
+          git diff --exit-code -- requirements.txt
 
       - name: Check formatting
         run: uv run ruff format --check .
