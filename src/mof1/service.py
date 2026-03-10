@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from threading import Event
@@ -21,13 +21,14 @@ from .models import (
     EventOption,
     SessionSelection,
     SessionSnapshot,
+    as_triplet,
     coerce_utc_datetime,
     format_datetime_utc,
     format_timedelta,
     uses_fastest_lap_order,
 )
 
-
+UTC = timezone.utc
 _CACHE_READY = False
 _RUNTIME_READY = False
 _REQUESTS_PER_SECOND = 4
@@ -47,15 +48,11 @@ def _configure_fastf1_runtime() -> None:
     rate_limits = {
         re.compile(r"^https?://(\w+\.)?ergast\.com.*"): [
             fastf1_req._MinIntervalLimitDelay(min_interval),
-            fastf1_req._CallsPerIntervalLimitRaise(
-                200, 60 * 60, "ergast.com: 200 calls/h"
-            ),
+            fastf1_req._CallsPerIntervalLimitRaise(200, 60 * 60, "ergast.com: 200 calls/h"),
         ],
         re.compile(r"^https?://.+\..+"): [
             fastf1_req._MinIntervalLimitDelay(min_interval),
-            fastf1_req._CallsPerIntervalLimitRaise(
-                500, 60 * 60, "any API: 500 calls/h"
-            ),
+            fastf1_req._CallsPerIntervalLimitRaise(500, 60 * 60, "any API: 500 calls/h"),
         ],
     }
     fastf1_req._SessionWithRateLimiting._RATE_LIMITS = rate_limits
@@ -158,7 +155,9 @@ class FastF1Service:
     def get_schedule(self, year: int) -> pd.DataFrame:
         return self._schedule_for_year(year)
 
-    def available_years(self, *, current_year: int | None = None, lookback: int = 6) -> tuple[int, ...]:
+    def available_years(
+        self, *, current_year: int | None = None, lookback: int = 6
+    ) -> tuple[int, ...]:
         year = current_year or datetime.now(UTC).year
         return tuple(range(year, max(year - lookback, 2017), -1))
 
@@ -203,7 +202,9 @@ class FastF1Service:
             )
         return tuple(sessions)
 
-    def default_history_selection(self, year: int, *, now: datetime | None = None) -> SessionSelection:
+    def default_history_selection(
+        self, year: int, *, now: datetime | None = None
+    ) -> SessionSelection:
         current_time = now or datetime.now(UTC)
         sessions = self.flatten_sessions(year)
         past_sessions = [session for session in sessions if session.start_utc <= current_time]
@@ -243,7 +244,11 @@ class FastF1Service:
                 f"Monitoring {latest_started.event_name} {latest_started.session_name}. "
                 f"Started at {format_datetime_utc(latest_started.start_utc)}."
             )
-        elif latest_started and next_session and latest_started.round_number == next_session.round_number:
+        elif (
+            latest_started
+            and next_session
+            and latest_started.round_number == next_session.round_number
+        ):
             badge = "WEEKEND IN PROGRESS"
             note = (
                 f"Showing the latest completed session. "
@@ -262,6 +267,7 @@ class FastF1Service:
             note = "Season complete. Showing the most recent finished session."
         else:
             badge = "UPCOMING"
+            assert next_session is not None
             note = (
                 f"Season not started yet. Next session: {next_session.event_name} "
                 f"{next_session.session_name} at {format_datetime_utc(next_session.start_utc)}."
@@ -514,7 +520,11 @@ class FastF1Service:
 
     @staticmethod
     def _latest_stream_positions(stream_data: pd.DataFrame) -> dict[str, int]:
-        if stream_data.empty or "Driver" not in stream_data.columns or "Position" not in stream_data.columns:
+        if (
+            stream_data.empty
+            or "Driver" not in stream_data.columns
+            or "Position" not in stream_data.columns
+        ):
             return {}
 
         latest = stream_data.copy()
@@ -527,10 +537,7 @@ class FastF1Service:
         if "Time" in latest.columns:
             latest = latest.sort_values(by="Time", kind="mergesort", na_position="last")
         latest = latest.groupby("Driver", sort=False).tail(1)
-        return {
-            str(row["Driver"]): int(row["Position"])
-            for _, row in latest.iterrows()
-        }
+        return {str(row["Driver"]): int(row["Position"]) for _, row in latest.iterrows()}
 
     @staticmethod
     def _apply_deleted_laps_from_race_control(
@@ -540,12 +547,8 @@ class FastF1Service:
         if laps.empty or race_control.empty:
             return
 
-        msg_pattern = re.compile(
-            r"CAR (\d{1,2}) .* TIME (\d:\d\d\.\d\d\d) DELETED - (.*)"
-        )
-        reinstated_pattern = re.compile(
-            r"CAR (\d{1,2}) .* TIME (\d:\d\d\.\d\d\d) .*REINSTATED.*"
-        )
+        msg_pattern = re.compile(r"CAR (\d{1,2}) .* TIME (\d:\d\d\.\d\d\d) DELETED - (.*)")
+        reinstated_pattern = re.compile(r"CAR (\d{1,2}) .* TIME (\d:\d\d\.\d\d\d) .*REINSTATED.*")
         timestamp_pattern = re.compile(r"\d\d:\d\d:\d\d")
 
         reinstated_laps: set[tuple[str, pd.Timedelta]] = set()
@@ -568,10 +571,7 @@ class FastF1Service:
                 continue
 
             reason = timestamp_pattern.sub("", match[3]).strip()
-            mask = (
-                (laps["DriverNumber"] == driver_number)
-                & (laps["LapTime"] == lap_time)
-            )
+            mask = (laps["DriverNumber"] == driver_number) & (laps["LapTime"] == lap_time)
             laps.loc[mask, "Deleted"] = True
             if "IsPersonalBest" in laps.columns:
                 laps.loc[mask, "IsPersonalBest"] = False
@@ -606,13 +606,13 @@ class FastF1Service:
                     continue
 
                 if "Deleted" in timed_group.columns:
-                    timed_group = timed_group.loc[timed_group["Deleted"] != True]
+                    timed_group = timed_group.loc[timed_group["Deleted"].ne(True)]
                 if timed_group.empty:
                     continue
 
                 latest_group = timed_group
                 if "IsAccurate" in latest_group.columns:
-                    accurate_only = latest_group.loc[latest_group["IsAccurate"] == True]
+                    accurate_only = latest_group.loc[latest_group["IsAccurate"].eq(True)]
                     if not accurate_only.empty:
                         latest_group = accurate_only
 
@@ -624,7 +624,7 @@ class FastF1Service:
 
                 best_group = timed_group
                 if "IsPersonalBest" in best_group.columns:
-                    best_only = best_group.loc[best_group["IsPersonalBest"] == True]
+                    best_only = best_group.loc[best_group["IsPersonalBest"].eq(True)]
                     if not best_only.empty:
                         best_group = best_only
 
@@ -672,7 +672,9 @@ class FastF1Service:
                     "code": code,
                     "team": team,
                     "status": status,
-                    "current_lap_time": latest_lap.get("LapTime") if latest_lap is not None else None,
+                    "current_lap_time": latest_lap.get("LapTime")
+                    if latest_lap is not None
+                    else None,
                     "best_lap_time": best_lap.get("LapTime") if best_lap is not None else None,
                     "current_sectors": current_sector_times,
                     "best_sectors": driver_sector_bests,
@@ -718,10 +720,10 @@ class FastF1Service:
                     team=row["team"],
                     current_lap=format_timedelta(row["current_lap_time"]),
                     best_lap=format_timedelta(row["best_lap_time"]),
-                    current_sectors=tuple(
+                    current_sectors=as_triplet(
                         format_timedelta(value) for value in row["current_sectors"]
                     ),
-                    best_sectors=tuple(
+                    best_sectors=as_triplet(
                         format_timedelta(value) for value in row["best_sectors"]
                     ),
                     current_sector_statuses=row["current_sector_statuses"],
@@ -746,12 +748,10 @@ class FastF1Service:
                 team=row["team"],
                 current_lap=format_timedelta(row["current_lap_time"]),
                 best_lap=format_timedelta(row["best_lap_time"]),
-                current_sectors=tuple(
+                current_sectors=as_triplet(
                     format_timedelta(value) for value in row["current_sectors"]
                 ),
-                best_sectors=tuple(
-                    format_timedelta(value) for value in row["best_sectors"]
-                ),
+                best_sectors=as_triplet(format_timedelta(value) for value in row["best_sectors"]),
                 current_sector_statuses=row["current_sector_statuses"],
                 best_sector_statuses=row["best_sector_statuses"],
                 current_lap_status=row["current_lap_status"],
@@ -767,8 +767,7 @@ class FastF1Service:
         if fastest is None:
             return None
         return (
-            f"Fastest lap: {fastest.get('Driver', '-')} "
-            f"{format_timedelta(fastest.get('LapTime'))}"
+            f"Fastest lap: {fastest.get('Driver', '-')} {format_timedelta(fastest.get('LapTime'))}"
         )
 
     @staticmethod
@@ -824,16 +823,18 @@ class FastF1Service:
         if laps.empty:
             return (None, None, None)
         rows = FastF1Service._session_fastest_sector_rows(laps)
-        return tuple(
+        return as_triplet(
             row.get(f"Sector{index}Time") if row is not None else None
             for index, row in enumerate(rows, start=1)
         )
 
     @staticmethod
-    def _session_fastest_sector_rows(laps: pd.DataFrame) -> tuple[pd.Series | None, pd.Series | None, pd.Series | None]:
+    def _session_fastest_sector_rows(
+        laps: pd.DataFrame,
+    ) -> tuple[pd.Series | None, pd.Series | None, pd.Series | None]:
         if laps.empty:
             return (None, None, None)
-        return tuple(
+        return as_triplet(
             FastF1Service._fastest_sector_row(laps, column)
             for column in ("Sector1Time", "Sector2Time", "Sector3Time")
         )
@@ -844,7 +845,7 @@ class FastF1Service:
             return None
         valid = laps.dropna(subset=[column])
         if "Deleted" in valid.columns:
-            valid = valid.loc[valid["Deleted"] != True]
+            valid = valid.loc[valid["Deleted"].ne(True)]
         if valid.empty:
             return None
         return valid.sort_values(by=[column, "Time"], kind="mergesort").iloc[0]
@@ -855,7 +856,7 @@ class FastF1Service:
             return None
         valid = laps.dropna(subset=["LapTime"])
         if "Deleted" in valid.columns:
-            valid = valid.loc[valid["Deleted"] != True]
+            valid = valid.loc[valid["Deleted"].ne(True)]
         if valid.empty:
             return None
         return valid.sort_values(by=["LapTime", "Time"], kind="mergesort").iloc[0]
@@ -873,9 +874,17 @@ class FastF1Service:
             return "-"
 
         current = pd.Timedelta(current_value)
-        if session_best is not None and not pd.isna(session_best) and current == pd.Timedelta(session_best):
+        if (
+            session_best is not None
+            and not pd.isna(session_best)
+            and current == pd.Timedelta(session_best)
+        ):
             return "P"
-        if personal_best is not None and not pd.isna(personal_best) and current == pd.Timedelta(personal_best):
+        if (
+            personal_best is not None
+            and not pd.isna(personal_best)
+            and current == pd.Timedelta(personal_best)
+        ):
             return "G"
         return "Y"
 
@@ -889,7 +898,11 @@ class FastF1Service:
             return "-"
 
         best = pd.Timedelta(best_value)
-        if session_best is not None and not pd.isna(session_best) and best == pd.Timedelta(session_best):
+        if (
+            session_best is not None
+            and not pd.isna(session_best)
+            and best == pd.Timedelta(session_best)
+        ):
             return "P"
         return "G"
 

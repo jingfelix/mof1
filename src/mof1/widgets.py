@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import re
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from .models import DriverSnapshot, SessionSnapshot
-
 
 TEAM_COLOR_MAP: dict[str, tuple[str, ...]] = {
     "mclaren": ("#FF8000",),
@@ -19,7 +18,7 @@ TEAM_COLOR_MAP: dict[str, tuple[str, ...]] = {
     "racing bulls": ("#FFFFFF", "#1F5BFF"),
     "audi": ("#8A8D8F", "#D5001C"),
     "alpine": ("#0050FF", "#FF4FA3"),
-    "cadillac": ("#111111", "#FFFFFF"),
+    "cadillac": ("#4A4A4A", "#FFFFFF"),
     "aston martin": ("#00665E",),
     "haas": ("#E10600",),
 }
@@ -34,12 +33,14 @@ TYRE_STYLE_MAP: dict[str, str] = {
 
 
 def render_summary(snapshot: SessionSnapshot) -> Panel:
-    renderables: list[object] = [
+    renderables: list[RenderableType] = [
         Text(snapshot.subtitle, style="bold white"),
         _summary_meta(snapshot),
     ]
     renderables.extend(_summary_line_renderable(line) for line in snapshot.summary_lines)
-    if snapshot.error and not any(line.startswith("Load error:") for line in snapshot.summary_lines):
+    if snapshot.error and not any(
+        line.startswith("Load error:") for line in snapshot.summary_lines
+    ):
         renderables.append(_summary_alert_line(snapshot.error))
     body = Group(*renderables)
     border_style = "red" if snapshot.error else "bright_blue"
@@ -301,11 +302,17 @@ def _team_swatches(colors: tuple[str, ...]) -> Text:
 
 
 def _used_tyre_text(driver: DriverSnapshot) -> Text | None:
-    if driver.used_tyre_sets is None and not driver.used_tyre_stints and not driver.used_tyre_compounds:
+    if (
+        driver.used_tyre_sets is None
+        and not driver.used_tyre_stints
+        and not driver.used_tyre_compounds
+    ):
         return None
 
     text = Text()
-    sets = driver.used_tyre_sets if driver.used_tyre_sets is not None else len(driver.used_tyre_stints)
+    sets = (
+        driver.used_tyre_sets if driver.used_tyre_sets is not None else len(driver.used_tyre_stints)
+    )
     text.append(f"Sets {sets}", style="dim")
     for index, (compound, laps) in enumerate(driver.used_tyre_stints):
         text.append(" ", style="dim")
@@ -625,7 +632,9 @@ def _rain_value_style(value: str) -> str:
 
 def _race_control_value_style(value: str) -> str:
     normalized = value.lower()
-    if any(token in normalized for token in ("red", "stopped", "incident", "penalty", "investigation")):
+    if any(
+        token in normalized for token in ("red", "stopped", "incident", "penalty", "investigation")
+    ):
         return "bold #fecaca"
     if any(token in normalized for token in ("yellow", "vsc", "safety car")):
         return "bold #fde68a"

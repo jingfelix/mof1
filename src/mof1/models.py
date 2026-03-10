@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Iterable
+from datetime import datetime, timezone
+from typing import Any, TypeVar
 
 import pandas as pd
+
+UTC = timezone.utc
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -134,7 +138,7 @@ def format_datetime_utc(value: datetime) -> str:
 
 
 def coerce_utc_datetime(value: object) -> datetime:
-    timestamp = pd.Timestamp(value)
+    timestamp = pd.Timestamp(cast_to_any(value))
     if timestamp.tzinfo is None:
         timestamp = timestamp.tz_localize("UTC")
     else:
@@ -142,7 +146,9 @@ def coerce_utc_datetime(value: object) -> datetime:
     return timestamp.to_pydatetime()
 
 
-def split_drivers(drivers: Iterable[DriverSnapshot]) -> tuple[list[DriverSnapshot], list[DriverSnapshot]]:
+def split_drivers(
+    drivers: Iterable[DriverSnapshot],
+) -> tuple[list[DriverSnapshot], list[DriverSnapshot]]:
     driver_list = list(drivers)
     midpoint = (len(driver_list) + 1) // 2
     return driver_list[:midpoint], driver_list[midpoint:]
@@ -150,8 +156,13 @@ def split_drivers(drivers: Iterable[DriverSnapshot]) -> tuple[list[DriverSnapsho
 
 def uses_fastest_lap_order(session_name: str) -> bool:
     normalized = session_name.lower()
-    return (
-        "practice" in normalized
-        or "qualifying" in normalized
-        or "sprint" in normalized
-    )
+    return "practice" in normalized or "qualifying" in normalized or "sprint" in normalized
+
+
+def as_triplet(values: Iterable[_T]) -> tuple[_T, _T, _T]:
+    first, second, third = values
+    return (first, second, third)
+
+
+def cast_to_any(value: object) -> Any:
+    return value

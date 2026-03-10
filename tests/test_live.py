@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from mof1.live import LiveTimingState
+
+UTC = timezone.utc
 
 
 def _base_live_payload() -> dict[str, object]:
@@ -223,7 +225,10 @@ def test_live_timing_snapshot_builds_current_panel_data() -> None:
     assert snapshot.drivers[0].used_tyre_compounds == ("S", "M")
     assert snapshot.drivers[0].used_tyre_stints == (("S", 7), ("M", 11))
     assert snapshot.drivers[1].best_lap_status == "G"
-    assert snapshot.summary_lines[0] == "Session: Started | Track: AllClear | Remain 00:24:30 | Laps 18/58 (-40)"
+    assert (
+        snapshot.summary_lines[0]
+        == "Session: Started | Track: AllClear | Remain 00:24:30 | Laps 18/58 (-40)"
+    )
     assert snapshot.summary_lines[1] == "Weather: air 25.0C | track 34.5C | rain no | wind 1.9m/s"
     assert "Order by single-lap pace" in snapshot.summary_lines[2]
     assert "Best sectors:" in snapshot.summary_lines[3]

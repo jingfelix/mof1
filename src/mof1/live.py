@@ -4,17 +4,24 @@ import copy
 import json
 import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Event
-from typing import Any, Callable
+from typing import Any
 
 import requests
 from websocket import WebSocketTimeoutException, create_connection
 
-from .models import DriverSnapshot, SessionSnapshot, format_datetime_utc, uses_fastest_lap_order
+from .models import (
+    DriverSnapshot,
+    SessionSnapshot,
+    as_triplet,
+    format_datetime_utc,
+    uses_fastest_lap_order,
+)
 
-
+UTC = timezone.utc
 _SIGNALR_SEPARATOR = "\x1e"
 _NEGOTIATE_URL = "https://livetiming.formula1.com/signalrcore/negotiate?negotiateVersion=1"
 _WEBSOCKET_URL = "wss://livetiming.formula1.com/signalrcore?id={token}"
@@ -38,11 +45,15 @@ class LiveTimingState:
     topics: dict[str, Any] = field(default_factory=dict)
     received_at_utc: datetime | None = None
 
-    def apply_snapshot(self, payload: dict[str, Any], *, received_at_utc: datetime | None = None) -> None:
+    def apply_snapshot(
+        self, payload: dict[str, Any], *, received_at_utc: datetime | None = None
+    ) -> None:
         for topic, data in payload.items():
             self.apply_topic(topic, data, received_at_utc=received_at_utc)
 
-    def apply_topic(self, topic: str, data: Any, *, received_at_utc: datetime | None = None) -> None:
+    def apply_topic(
+        self, topic: str, data: Any, *, received_at_utc: datetime | None = None
+    ) -> None:
         self.topics[topic] = _deep_merge(self.topics.get(topic), data)
         self.received_at_utc = received_at_utc or datetime.now(UTC)
 
@@ -78,9 +89,7 @@ class LiveTimingState:
             current_stint = stints[-1] if stints else {}
             used_compounds = tuple(
                 compound
-                for compound in (
-                    _short_compound(stint.get("Compound")) for stint in stints
-                )
+                for compound in (_short_compound(stint.get("Compound")) for stint in stints)
                 if compound != "-"
             )
             used_stints = tuple(
@@ -116,7 +125,9 @@ class LiveTimingState:
                     "position": position,
                     "status": _driver_status(timing),
                     "best_lap_rank": _metric_rank(best_lap_metric),
-                    "best_sector_ranks": tuple(_metric_rank(metric) for metric in best_sector_metrics),
+                    "best_sector_ranks": tuple(
+                        _metric_rank(metric) for metric in best_sector_metrics
+                    ),
                     "current_lap_metric": current_lap_metric,
                     "best_lap_metric": best_lap_metric,
                     "current_lap_time": _metric_timedelta(current_lap_metric),
@@ -138,12 +149,9 @@ class LiveTimingState:
                 }
             )
 
-        session_fastest_lap = _best_time(
-            row["best_lap_time"] for row in raw_rows
-        )
-        session_fastest_sectors = tuple(
-            _best_time(row["best_sector_times"][index] for row in raw_rows)
-            for index in range(3)
+        session_fastest_lap = _best_time(row["best_lap_time"] for row in raw_rows)
+        session_fastest_sectors = as_triplet(
+            _best_time(row["best_sector_times"][index] for row in raw_rows) for index in range(3)
         )
 
         if uses_fastest_lap_order(session_name):
@@ -172,13 +180,13 @@ class LiveTimingState:
                     team=row["team"],
                     current_lap=_metric_text(row["current_lap_metric"]),
                     best_lap=_metric_text(row["best_lap_metric"]),
-                    current_sectors=tuple(
+                    current_sectors=as_triplet(
                         _metric_text(metric) for metric in row["current_sectors_metrics"]
                     ),
-                    best_sectors=tuple(
+                    best_sectors=as_triplet(
                         _metric_text(metric) for metric in row["best_sectors_metrics"]
                     ),
-                    current_sector_statuses=tuple(
+                    current_sector_statuses=as_triplet(
                         _current_metric_status(
                             row["current_sectors_metrics"][sector_index],
                             row["best_sector_times"][sector_index],
@@ -186,7 +194,7 @@ class LiveTimingState:
                         )
                         for sector_index in range(3)
                     ),
-                    best_sector_statuses=tuple(
+                    best_sector_statuses=as_triplet(
                         _best_metric_status(
                             row["best_sector_times"][sector_index],
                             session_fastest_sectors[sector_index],
@@ -760,11 +768,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _data_keys(value: dict[str, Any]) -> set[str]:
-    return {
-        key
-        for key in value
-        if not str(key).startswith("_")
-    }
+    return {key for key in value if not str(key).startswith("_")}
 
 
 def _iter_signalr_messages(payload: str) -> list[str]:

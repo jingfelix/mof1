@@ -1,6 +1,9 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+from typing import cast
 
+from rich.console import Group
 from rich.table import Table
+from rich.text import Text
 
 from mof1.models import DriverSnapshot, SessionSnapshot
 from mof1.widgets import (
@@ -11,6 +14,8 @@ from mof1.widgets import (
     _timing_block,
     render_summary,
 )
+
+UTC = timezone.utc
 
 
 def _sample_driver(
@@ -122,7 +127,7 @@ def test_summary_line_renderable_groups_status_metrics() -> None:
     )
 
     assert isinstance(renderable, Table)
-    plains = [cell.plain for column in renderable.columns for cell in column._cells]
+    plains = [cast(Text, cell).plain for column in renderable.columns for cell in column._cells]
     assert any("SESSION" in item and "Started" in item for item in plains)
     assert any("TRACK" in item and "AllClear" in item for item in plains)
     assert any("REMAIN" in item and "00:24:30" in item for item in plains)
@@ -135,7 +140,7 @@ def test_summary_line_renderable_aligns_fastest_to_fixed_column() -> None:
     )
 
     assert isinstance(renderable, Table)
-    plains = [column._cells[0].plain for column in renderable.columns]
+    plains = [cast(Text, column._cells[0]).plain for column in renderable.columns]
     assert "LEADER" in plains[0]
     assert plains[1] == ""
     assert "FASTEST" in plains[2]
@@ -159,10 +164,10 @@ def test_render_summary_uses_structured_rows() -> None:
     )
 
     panel = render_summary(snapshot)
-    body = panel.renderable.renderables
+    body = cast(Group, panel.renderable).renderables
 
-    assert body[0].plain == "Race | 2026-03-08 05:00 UTC"
-    assert "STARTED" in body[1].plain
+    assert cast(Text, body[0]).plain == "Race | 2026-03-08 05:00 UTC"
+    assert "STARTED" in cast(Text, body[1]).plain
     assert isinstance(body[2], Table)
     assert isinstance(body[3], Table)
     assert isinstance(body[4], Table)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from functools import partial
 from threading import Event, Thread, current_thread
 from typing import Any
@@ -9,8 +10,7 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Footer, Header, Select, Static, TabPane, TabbedContent
-from textual.worker import WorkerState
+from textual.widgets import Footer, Header, Select, Static, TabbedContent, TabPane
 
 from .models import (
     BootstrapPayload,
@@ -23,6 +23,8 @@ from .models import (
 )
 from .service import FastF1Service
 from .widgets import render_driver_panel, render_summary
+
+UTC = timezone.utc
 
 
 class F1TimingApp(App[None]):
@@ -65,6 +67,8 @@ class F1TimingApp(App[None]):
         self._bootstrapping = True
         self._current_ready = False
         self._history_ready = False
+        self._background_job_tokens: dict[str, int] = {}
+        self._shutting_down = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -132,19 +136,18 @@ class F1TimingApp(App[None]):
         self._set_driver_loading("current", True)
         self._set_driver_loading("history", True)
 
-        self.run_worker(
-            self._load_bootstrap,
+        self._start_background_task(
             name="bootstrap",
             group="bootstrap",
-            thread=True,
-            exclusive=True,
-            exit_on_error=False,
+            work=self._load_bootstrap,
         )
 
     def on_unmount(self) -> None:
+        self._cancel_background_tasks()
         self._stop_current_live_feed(clear_status=True)
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
+        self._cancel_background_tasks()
         self._stop_current_live_feed(clear_status=True)
         self.exit()
 
@@ -157,13 +160,10 @@ class F1TimingApp(App[None]):
             return
         self._set_driver_loading("history", True)
         self._set_status(f"Refreshing history: {selection.event_name} {selection.session_name}")
-        self.run_worker(
-            partial(self.service.load_session_snapshot, selection),
+        self._start_background_task(
             name="history-refresh",
             group="history-refresh",
-            thread=True,
-            exclusive=True,
-            exit_on_error=False,
+            work=partial(self.service.load_session_snapshot, selection),
         )
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -181,13 +181,10 @@ class F1TimingApp(App[None]):
                 return
             self._set_driver_loading("history", True)
             self._set_status(f"Loading season {year}")
-            self.run_worker(
-                partial(self._load_history_catalog, year),
+            self._start_background_task(
                 name="history-year",
                 group="history-catalog",
-                thread=True,
-                exclusive=True,
-                exit_on_error=False,
+                work=partial(self._load_history_catalog, year),
             )
         elif event.select.id == "history-event":
             event_key = event.value
@@ -198,13 +195,10 @@ class F1TimingApp(App[None]):
                 return
             self._set_driver_loading("history", True)
             self._set_status(f"Loading event {event_key}")
-            self.run_worker(
-                partial(self._load_history_event, year, event_key),
+            self._start_background_task(
                 name="history-event",
                 group="history-event",
-                thread=True,
-                exclusive=True,
-                exit_on_error=False,
+                work=partial(self._load_history_event, year, event_key),
             )
         elif event.select.id == "history-session":
             session_key = event.value
@@ -214,38 +208,12 @@ class F1TimingApp(App[None]):
             if selection is None:
                 return
             self._set_driver_loading("history", True)
-            self._set_status(
-                f"Loading history: {selection.event_name} {selection.session_name}"
-            )
-            self.run_worker(
-                partial(self.service.load_session_snapshot, selection),
+            self._set_status(f"Loading history: {selection.event_name} {selection.session_name}")
+            self._start_background_task(
                 name="history-refresh",
                 group="history-refresh",
-                thread=True,
-                exclusive=True,
-                exit_on_error=False,
+                work=partial(self.service.load_session_snapshot, selection),
             )
-
-    def on_worker_state_changed(self, event) -> None:
-        if event.state == WorkerState.ERROR:
-            self._handle_worker_error(event.worker.name or "worker", event.worker.error)
-            return
-
-        if event.state != WorkerState.SUCCESS:
-            return
-
-        name = event.worker.name or ""
-        result = event.worker.result
-        if name == "bootstrap" and isinstance(result, BootstrapPayload):
-            self._apply_bootstrap(result)
-        elif name == "current-refresh" and isinstance(result, SessionSnapshot):
-            self._apply_current_snapshot(result)
-        elif name == "history-year" and isinstance(result, HistoryCatalogPayload):
-            self._apply_history_catalog(result)
-        elif name == "history-event" and isinstance(result, HistoryEventPayload):
-            self._apply_history_event(result)
-        elif name == "history-refresh" and isinstance(result, SessionSnapshot):
-            self._apply_history_snapshot(result)
 
     def _load_bootstrap(self) -> BootstrapPayload:
         current_context = self.service.current_context()
@@ -308,24 +276,25 @@ class F1TimingApp(App[None]):
 
         context = self.service.current_context()
         self.current_context = context
-        note = context.note if not manual else f"{context.note} Manual refresh at {datetime.now(UTC).strftime('%H:%M:%S')} UTC."
+        note = (
+            context.note
+            if not manual
+            else f"{context.note} Manual refresh at {datetime.now(UTC).strftime('%H:%M:%S')} UTC."
+        )
         if not self._current_ready:
             self._set_driver_loading("current", True)
         self._set_status(
             f"Refreshing current: {context.target.event_name} {context.target.session_name}"
         )
-        self.run_worker(
-            partial(
+        self._start_background_task(
+            name="current-refresh",
+            group="current-refresh",
+            work=partial(
                 self.service.load_session_snapshot,
                 context.target,
                 badge_override=context.badge,
                 note_override=note,
             ),
-            name="current-refresh",
-            group="current-refresh",
-            thread=True,
-            exclusive=True,
-            exit_on_error=False,
         )
 
     def _apply_bootstrap(self, payload: BootstrapPayload) -> None:
@@ -343,9 +312,7 @@ class F1TimingApp(App[None]):
             event_select.set_options([(event.label, event.key) for event in payload.history_events])
             event_select.value = payload.history_event_key
 
-            self.history_sessions = {
-                session.key: session for session in payload.history_sessions
-            }
+            self.history_sessions = {session.key: session for session in payload.history_sessions}
             session_select.set_options(
                 [(session.label, session.key) for session in payload.history_sessions]
             )
@@ -369,9 +336,7 @@ class F1TimingApp(App[None]):
         session_select = self.query_one("#history-session", Select)
 
         self.history_events = {event.key: event for event in payload.events}
-        self.history_sessions = {
-            session.key: session for session in payload.sessions
-        }
+        self.history_sessions = {session.key: session for session in payload.sessions}
 
         self._history_syncing = True
         try:
@@ -388,9 +353,7 @@ class F1TimingApp(App[None]):
 
     def _apply_history_event(self, payload: HistoryEventPayload) -> None:
         session_select = self.query_one("#history-session", Select)
-        self.history_sessions = {
-            session.key: session for session in payload.sessions
-        }
+        self.history_sessions = {session.key: session for session in payload.sessions}
 
         self._history_syncing = True
         try:
@@ -415,6 +378,83 @@ class F1TimingApp(App[None]):
         if not isinstance(value, str) or value == self.LOADING_VALUE:
             return None
         return self.history_sessions.get(value)
+
+    def _start_background_task(
+        self,
+        *,
+        name: str,
+        group: str,
+        work: Callable[[], object],
+    ) -> None:
+        token = self._background_job_tokens.get(group, 0) + 1
+        self._background_job_tokens[group] = token
+        thread = Thread(
+            target=self._run_background_task,
+            args=(name, group, token, work),
+            name=f"mof1-{name}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_background_task(
+        self,
+        name: str,
+        group: str,
+        token: int,
+        work: Callable[[], object],
+    ) -> None:
+        try:
+            result = work()
+        except Exception as error:
+            self._call_from_live_thread(
+                self._finish_background_task,
+                name,
+                group,
+                token,
+                None,
+                error,
+            )
+            return
+
+        self._call_from_live_thread(
+            self._finish_background_task,
+            name,
+            group,
+            token,
+            result,
+            None,
+        )
+
+    def _finish_background_task(
+        self,
+        name: str,
+        group: str,
+        token: int,
+        result: object | None,
+        error: Exception | None,
+    ) -> None:
+        if self._shutting_down:
+            return
+        if token != self._background_job_tokens.get(group):
+            return
+        if error is not None:
+            self._handle_worker_error(name, error)
+            return
+        if name == "bootstrap" and isinstance(result, BootstrapPayload):
+            self._apply_bootstrap(result)
+        elif name == "current-refresh" and isinstance(result, SessionSnapshot):
+            self._apply_current_snapshot(result)
+        elif name == "history-year" and isinstance(result, HistoryCatalogPayload):
+            self._apply_history_catalog(result)
+        elif name == "history-event" and isinstance(result, HistoryEventPayload):
+            self._apply_history_event(result)
+        elif name == "history-refresh" and isinstance(result, SessionSnapshot):
+            self._apply_history_snapshot(result)
+
+    def _cancel_background_tasks(self) -> None:
+        self._shutting_down = True
+        for group, token in list(self._background_job_tokens.items()):
+            self._background_job_tokens[group] = token + 1
 
     def _handle_worker_error(self, worker_name: str, error: Exception | None) -> None:
         message = str(error) if error else "Unknown worker error"
@@ -562,11 +602,7 @@ class F1TimingApp(App[None]):
 
         if stop_event is not None:
             stop_event.set()
-        if (
-            thread is not None
-            and thread.is_alive()
-            and thread is not current_thread()
-        ):
+        if thread is not None and thread.is_alive() and thread is not current_thread():
             thread.join(timeout=2.0)
 
         if clear_status:

@@ -1,10 +1,19 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+from typing import Any, cast
 
 from textual.widgets import Static
 
 from mof1.main import F1TimingApp
-from mof1.models import CurrentContext, DriverSnapshot, EventOption, SessionSelection, SessionSnapshot
+from mof1.models import (
+    CurrentContext,
+    DriverSnapshot,
+    EventOption,
+    SessionSelection,
+    SessionSnapshot,
+)
+
+UTC = timezone.utc
 
 
 def test_refresh_interval_label() -> None:
@@ -92,7 +101,7 @@ class _FakeService:
 
 def test_app_mounts_with_live_disabled() -> None:
     async def run() -> None:
-        app = F1TimingApp(service=_FakeService(), enable_live_current=False)
+        app = F1TimingApp(service=cast(Any, _FakeService()), enable_live_current=False)
         async with app.run_test() as pilot:
             await pilot.pause()
             assert app.current_snapshot is not None

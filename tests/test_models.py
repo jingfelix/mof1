@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
 from mof1.models import DriverSnapshot, SessionSelection, format_timedelta, split_drivers
 from mof1.service import FastF1Service
+
+UTC = timezone.utc
 
 
 def test_format_timedelta_for_minute_values() -> None:
