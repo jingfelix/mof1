@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import cast
+from typing import Any, cast
 
 from rich.console import Group
 from rich.table import Table
@@ -8,10 +8,12 @@ from rich.text import Text
 from mof1.models import DriverSnapshot, SessionSnapshot
 from mof1.widgets import (
     _driver_identity,
+    _mini_sector_strip,
     _summary_line_renderable,
     _team_colors,
     _team_swatches,
     _timing_block,
+    render_driver_panel,
     render_summary,
 )
 
@@ -27,6 +29,11 @@ def _sample_driver(
     used_tyre_sets: int | None = None,
     used_tyre_compounds: tuple[str, ...] = (),
     used_tyre_stints: tuple[tuple[str, int | None], ...] = (),
+    current_mini_sector_statuses: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] = (
+        (),
+        (),
+        (),
+    ),
 ) -> DriverSnapshot:
     return DriverSnapshot(
         1,
@@ -47,6 +54,7 @@ def _sample_driver(
         used_tyre_sets,
         used_tyre_compounds,
         used_tyre_stints,
+        current_mini_sector_statuses,
     )
 
 
@@ -57,14 +65,26 @@ def test_team_colors_use_requested_palette() -> None:
     assert _team_colors("Stake F1 Team Kick Sauber") == ("#8A8D8F", "#D5001C")
 
 
-def test_driver_identity_can_swap_team_name_for_swatches() -> None:
+def test_driver_identity_can_hide_team_name_but_keep_swatches() -> None:
     identity = _driver_identity(
         _sample_driver("Ferrari"),
-        team_display_mode="colors",
+        team_display_mode="hide",
     )
 
     assert "Ferrari" not in identity.plain
+    assert identity.plain.endswith("VER")
     assert "[" not in identity.plain
+    assert any("#FF2800" in str(span.style) for span in identity.spans)
+
+
+def test_driver_identity_can_show_team_name_after_swatches() -> None:
+    identity = _driver_identity(
+        _sample_driver("Ferrari"),
+        team_display_mode="show",
+    )
+
+    assert "VER  Ferrari" in identity.plain
+    assert "Ferrari" in identity.plain
     assert any("#FF2800" in str(span.style) for span in identity.spans)
 
 
@@ -77,7 +97,7 @@ def test_two_color_swatches_are_adjacent_single_cells() -> None:
     assert "#1F5BFF" in str(swatches.spans[1].style)
 
 
-def test_timing_block_can_inline_tyre_details() -> None:
+def test_timing_block_groups_sectors_and_laps_into_two_rows() -> None:
     block = _timing_block(
         _sample_driver(
             "Ferrari",
@@ -88,37 +108,90 @@ def test_timing_block_can_inline_tyre_details() -> None:
             used_tyre_compounds=("S", "M"),
             used_tyre_stints=(("S", 12), ("M", 18)),
         ),
-        inline_tyre_details=True,
     )
 
-    lines = block.plain.splitlines()
+    assert isinstance(block, Table)
+    top = [cast(Text, column._cells[0]).plain for column in block.columns]
+    bottom = [cast(Text, column._cells[1]).plain for column in block.columns]
 
-    assert "Sets 2  S  12L  M * 18L" in lines[0]
-    assert "Sets" not in lines[1]
-    assert "Tyre" not in block.plain
-    assert "Tyres" not in block.plain
+    assert top[:3] == ["24.100 24.000", "27.200 27.100", "28.200 28.100"]
+    assert top[3] == "1:20.000 1:19.500"
+    assert bottom[:3] == ["-", "-", "-"]
+    assert "Sets 2  S  12L  M * 18L" in bottom[3]
 
 
-def test_timing_block_can_stack_tyre_details() -> None:
+def test_timing_block_places_mini_sector_strips_below_sector_pairs() -> None:
     block = _timing_block(
         _sample_driver(
             "Ferrari",
-            current_tyre="M",
-            current_tyre_new=True,
-            current_tyre_laps=18,
-            used_tyre_sets=2,
-            used_tyre_compounds=("S", "M"),
-            used_tyre_stints=(("S", 12), ("M", 18)),
+            current_mini_sector_statuses=(("Y", "G"), ("P", "R"), ("-",)),
         ),
-        inline_tyre_details=False,
     )
 
-    lines = block.plain.splitlines()
+    assert isinstance(block, Table)
+    bottom = [cast(Text, column._cells[1]) for column in block.columns]
 
-    assert len(lines) == 3
-    assert "Tyre" not in lines[0]
-    assert "Sets" not in lines[1]
-    assert lines[2] == "Sets 2  S  12L  M * 18L"
+    assert bottom[0].plain == "  "
+    assert bottom[1].plain == "  "
+    assert bottom[2].plain == " "
+    assert any("#facc15" in str(span.style) for span in bottom[0].spans)
+    assert any("#22c55e" in str(span.style) for span in bottom[0].spans)
+    assert any("#d946ef" in str(span.style) for span in bottom[1].spans)
+    assert any("#ef4444" in str(span.style) for span in bottom[1].spans)
+    assert any("#4b5563" in str(span.style) for span in bottom[2].spans)
+
+
+def test_mini_sector_strip_uses_background_swatches() -> None:
+    strip = _mini_sector_strip(("Y", "G", "P", "R", "-"))
+
+    assert strip.plain == "     "
+    assert len(strip.spans) == 5
+    assert any("#facc15" in str(span.style) for span in strip.spans)
+    assert any("#22c55e" in str(span.style) for span in strip.spans)
+    assert any("#d946ef" in str(span.style) for span in strip.spans)
+    assert any("#ef4444" in str(span.style) for span in strip.spans)
+    assert any("#4b5563" in str(span.style) for span in strip.spans)
+
+
+def test_render_driver_panel_uses_separate_sector_and_lap_columns() -> None:
+    snapshot = SessionSnapshot(
+        title="2026 Australian Grand Prix",
+        subtitle="Practice 1 | 2026-03-08 04:00 UTC",
+        badge="STARTED",
+        note="Live timing feed",
+        summary_lines=(),
+        drivers=(
+            _sample_driver(
+                "Ferrari",
+                current_tyre="M",
+                current_tyre_new=True,
+                current_tyre_laps=18,
+                used_tyre_sets=2,
+                used_tyre_compounds=("S", "M"),
+                used_tyre_stints=(("S", 12), ("M", 18)),
+                current_mini_sector_statuses=(("Y", "G"), ("P", "R"), ("-",)),
+            ),
+        ),
+        loaded_at_utc=datetime(2026, 3, 9, 11, 0, tzinfo=UTC),
+    )
+
+    panel = render_driver_panel(snapshot, compact=False, team_display_mode="hide")
+    body = cast(Group, panel.renderable).renderables
+    table = cast(Table, body[0])
+
+    assert [str(cast(Any, column.header)) for column in table.columns] == [
+        "Pos",
+        "Driver",
+        "S1",
+        "S2",
+        "S3",
+        "Lap",
+    ]
+    s1_cell = cast(Group, cast(Any, table.columns[2]._cells[0]))
+    lap_cell = cast(Group, cast(Any, table.columns[5]._cells[0]))
+    assert cast(Text, s1_cell.renderables[0]).plain == "24.100 24.000"
+    assert cast(Text, lap_cell.renderables[0]).plain == "1:20.000 1:19.500"
+    assert "Sets 2  S  12L  M * 18L" in cast(Text, lap_cell.renderables[1]).plain
 
 
 def test_summary_line_renderable_groups_status_metrics() -> None:

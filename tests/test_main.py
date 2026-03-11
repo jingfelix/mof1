@@ -22,10 +22,10 @@ def test_refresh_interval_label() -> None:
 
 
 def test_refresh_settings_text_mentions_history_loading() -> None:
-    text = F1TimingApp._refresh_settings_text(team_display_mode="colors")
+    text = F1TimingApp._refresh_settings_text(team_display_mode="hide")
 
     assert "anonymous F1 live timing feed" in text
-    assert "color swatches" in text
+    assert "swatches only" in text
     assert "History stays manual" in text
     assert "reconnect current" in text
 

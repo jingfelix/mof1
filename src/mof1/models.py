@@ -59,6 +59,11 @@ class DriverSnapshot:
     used_tyre_sets: int | None = None
     used_tyre_compounds: tuple[str, ...] = ()
     used_tyre_stints: tuple[tuple[str, int | None], ...] = ()
+    current_mini_sector_statuses: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] = (
+        (),
+        (),
+        (),
+    )
 
 
 @dataclass(frozen=True)

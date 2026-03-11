@@ -52,7 +52,7 @@ def render_driver_panel(
     *,
     panel_width: int = 0,
     compact: bool = False,
-    team_display_mode: str = "names",
+    team_display_mode: str = "hide",
 ) -> Panel:
     return _render_driver_panel(
         _panel_title(list(snapshot.drivers), "Drivers"),
@@ -79,17 +79,20 @@ def _render_driver_panel(
     if compact:
         table.add_column("Entry", ratio=1, style="white")
     else:
-        table.add_column("Driver", width=22, style="white")
-        table.add_column("Timing", ratio=1, style="white")
+        driver_width = 24 if team_display_mode == "show" else 8
+        table.add_column("Driver", width=driver_width, style="white")
+        table.add_column("S1", width=14, no_wrap=True, style="white")
+        table.add_column("S2", width=14, no_wrap=True, style="white")
+        table.add_column("S3", width=14, no_wrap=True, style="white")
+        table.add_column("Lap", ratio=1, style="white")
 
     if not drivers:
         message = error or "No driver timing data for this selection."
         if compact:
             table.add_row("-", message)
         else:
-            table.add_row("-", message, "")
+            table.add_row("-", message, "", "", "", "")
     else:
-        inline_tyre_details = not compact and panel_width >= 120
         for driver in drivers:
             position = str(driver.position) if driver.position is not None else "-"
             if compact:
@@ -104,41 +107,20 @@ def _render_driver_panel(
                 table.add_row(
                     position,
                     _driver_identity(driver, team_display_mode=team_display_mode),
-                    _timing_block(driver, inline_tyre_details=inline_tyre_details),
+                    _sector_cell(driver, 0),
+                    _sector_cell(driver, 1),
+                    _sector_cell(driver, 2),
+                    _lap_cell(driver),
                 )
 
     return Panel(Group(table, _legend()), title=title, border_style="white")
 
 
-def _compact_entry(driver: DriverSnapshot, *, team_display_mode: str) -> Text:
-    content = _driver_identity(driver, team_display_mode=team_display_mode, team_width=28)
-    content.append("\n")
-    content.append_text(
-        _timing_line(
-            "Now",
-            driver.current_sectors,
-            driver.current_sector_statuses,
-            driver.current_lap,
-            driver.current_lap_status,
-            extra="",
-        )
+def _compact_entry(driver: DriverSnapshot, *, team_display_mode: str) -> Group:
+    return Group(
+        _driver_identity(driver, team_display_mode=team_display_mode, team_width=28),
+        _timing_block(driver),
     )
-    content.append("\n")
-    content.append_text(
-        _timing_line(
-            "Best",
-            driver.best_sectors,
-            driver.best_sector_statuses,
-            driver.best_lap,
-            driver.best_lap_status,
-            extra="",
-        )
-    )
-    detail_line = _tyre_detail_line(driver, inline=False)
-    if detail_line is not None:
-        content.append("\n")
-        content.append_text(detail_line)
-    return content
 
 
 def _driver_identity(
@@ -148,75 +130,98 @@ def _driver_identity(
     team_width: int = 17,
 ) -> Text:
     line = Text()
+    colors = _team_colors(driver.team)
+    if colors:
+        line.append_text(_team_swatches(colors))
+        line.append(" ")
     line.append(driver.code, style="bold cyan")
-    line.append("  ")
-    if team_display_mode == "colors":
-        colors = _team_colors(driver.team)
-        if colors:
-            line.append_text(_team_swatches(colors))
-        else:
-            line.append(_shorten(driver.team, team_width), style="dim")
-    else:
+    if team_display_mode == "show":
+        line.append("  ")
         line.append(_shorten(driver.team, team_width), style="white")
     return line
 
 
-def _timing_block(driver: DriverSnapshot, *, inline_tyre_details: bool) -> Text:
-    block = _timing_line(
-        "Now",
-        driver.current_sectors,
-        driver.current_sector_statuses,
-        driver.current_lap,
-        driver.current_lap_status,
-        extra=_used_tyre_text(driver) if inline_tyre_details else "",
+def _timing_block(driver: DriverSnapshot) -> Table:
+    grid = Table.grid(expand=False, padding=(0, 1))
+    grid.add_column(ratio=1, no_wrap=True)
+    grid.add_column(ratio=1, no_wrap=True)
+    grid.add_column(ratio=1, no_wrap=True)
+    grid.add_column(ratio=2, no_wrap=True)
+
+    grid.add_row(
+        _sector_pair_text(
+            driver.current_sectors[0],
+            driver.current_sector_statuses[0],
+            driver.best_sectors[0],
+            driver.best_sector_statuses[0],
+        ),
+        _sector_pair_text(
+            driver.current_sectors[1],
+            driver.current_sector_statuses[1],
+            driver.best_sectors[1],
+            driver.best_sector_statuses[1],
+        ),
+        _sector_pair_text(
+            driver.current_sectors[2],
+            driver.current_sector_statuses[2],
+            driver.best_sectors[2],
+            driver.best_sector_statuses[2],
+        ),
+        _lap_pair_text(driver),
     )
-    block.append("\n")
-    block.append_text(
-        _timing_line(
-            "Best",
-            driver.best_sectors,
-            driver.best_sector_statuses,
-            driver.best_lap,
-            driver.best_lap_status,
-            extra="",
-        )
+    grid.add_row(
+        _mini_sector_strip(driver.current_mini_sector_statuses[0]),
+        _mini_sector_strip(driver.current_mini_sector_statuses[1]),
+        _mini_sector_strip(driver.current_mini_sector_statuses[2]),
+        _tyre_cell_text(driver),
     )
-    detail_line = _tyre_detail_line(driver, inline=inline_tyre_details)
-    if detail_line is not None:
-        block.append("\n")
-        block.append_text(detail_line)
-    return block
+    return grid
 
 
-def _timing_line(
-    label: str,
-    sectors: tuple[str, str, str],
-    sector_statuses: tuple[str, str, str],
-    lap: str,
-    lap_status: str,
-    *,
-    extra: Text | str | None = None,
-) -> Text:
-    line = Text()
-    line.append(f"{label:<5}", style="bold white")
-    for index, value in enumerate(sectors, start=1):
-        if index > 1:
-            line.append(" | ", style="dim")
-        _append_metric(line, value, sector_statuses[index - 1])
-    line.append(" | ", style="dim")
-    line.append("Lap ", style="dim")
-    _append_metric(line, lap, lap_status)
-    if extra:
-        line.append(" | ", style="dim")
-        if isinstance(extra, Text):
-            line.append_text(extra)
-        else:
-            line.append(extra, style="dim cyan")
-    return line
+def _sector_cell(driver: DriverSnapshot, index: int) -> Group:
+    return Group(
+        _sector_pair_text(
+            driver.current_sectors[index],
+            driver.current_sector_statuses[index],
+            driver.best_sectors[index],
+            driver.best_sector_statuses[index],
+        ),
+        _mini_sector_strip(driver.current_mini_sector_statuses[index]),
+    )
+
+
+def _lap_cell(driver: DriverSnapshot) -> Group:
+    return Group(
+        _lap_pair_text(driver),
+        _tyre_cell_text(driver),
+    )
 
 
 def _append_metric(line: Text, value: str, status: str) -> None:
     line.append(value, style=_timing_style(status))
+
+
+def _sector_pair_text(current: str, current_status: str, best: str, best_status: str) -> Text:
+    line = Text()
+    _append_metric(line, current, current_status)
+    line.append(" ", style="dim")
+    line.append(best, style=_reference_timing_style(best_status))
+    return line
+
+
+def _lap_pair_text(driver: DriverSnapshot) -> Text:
+    line = Text()
+    _append_metric(line, driver.current_lap, driver.current_lap_status)
+    line.append(" ", style="dim")
+    line.append(driver.best_lap, style=_reference_timing_style(driver.best_lap_status))
+    return line
+
+
+def _tyre_cell_text(driver: DriverSnapshot) -> Text:
+    used = _used_tyre_text(driver)
+    if used is not None:
+        return used
+    return Text("-", style="dim")
 
 
 def _legend() -> Text:
@@ -236,9 +241,39 @@ def _timing_style(status: str) -> str:
         return "bold bright_magenta"
     if status == "G":
         return "bold bright_green"
+    if status == "R":
+        return "bold bright_red"
     if status == "Y":
         return "bold bright_yellow"
     return "dim"
+
+
+def _reference_timing_style(status: str) -> str:
+    if status == "P":
+        return "bold bright_magenta"
+    return "dim #94a3b8"
+
+
+def _mini_sector_strip(statuses: tuple[str, ...]) -> Text:
+    if not statuses:
+        return Text("-", style="dim")
+
+    strip = Text()
+    for status in statuses:
+        strip.append(" ", style=_mini_sector_style(status))
+    return strip
+
+
+def _mini_sector_style(status: str) -> str:
+    if status == "P":
+        return "on #d946ef"
+    if status == "G":
+        return "on #22c55e"
+    if status == "R":
+        return "on #ef4444"
+    if status == "Y":
+        return "on #facc15"
+    return "on #4b5563"
 
 
 def _shorten(value: str, width: int) -> str:
@@ -332,16 +367,6 @@ def _used_tyre_text(driver: DriverSnapshot) -> Text | None:
         text.append(" ", style="dim")
         text.append("/".join(driver.used_tyre_compounds), style="dim cyan")
     return text
-
-
-def _tyre_detail_line(driver: DriverSnapshot, *, inline: bool) -> Text | None:
-    if inline:
-        return None
-
-    used = _used_tyre_text(driver)
-    if not used:
-        return None
-    return used
 
 
 def _tyre_badge(compound: str, *, new: bool = False) -> Text:

@@ -68,16 +68,28 @@ def _base_live_payload() -> dict[str, object]:
                             "Value": "24.100",
                             "OverallFastest": True,
                             "PersonalFastest": True,
+                            "Segments": [
+                                {"Status": 2048},
+                                {"Status": 1},
+                            ],
                         },
                         {
                             "Value": "27.200",
                             "OverallFastest": False,
                             "PersonalFastest": True,
+                            "Segments": [
+                                {"Status": 2},
+                                {"Status": 2064},
+                            ],
                         },
                         {
                             "Value": "28.200",
                             "OverallFastest": False,
                             "PersonalFastest": False,
+                            "Segments": [
+                                {"Status": 2048},
+                                {},
+                            ],
                         },
                     ],
                 },
@@ -217,6 +229,11 @@ def test_live_timing_snapshot_builds_current_panel_data() -> None:
     assert snapshot.drivers[0].best_sectors == ("24.100", "27.200", "28.150")
     assert snapshot.drivers[0].current_sector_statuses == ("P", "P", "Y")
     assert snapshot.drivers[0].best_sector_statuses == ("P", "P", "G")
+    assert snapshot.drivers[0].current_mini_sector_statuses == (
+        ("Y", "G"),
+        ("P", "R"),
+        ("Y", "-"),
+    )
     assert snapshot.drivers[0].current_lap_status == "P"
     assert snapshot.drivers[0].current_tyre == "M"
     assert snapshot.drivers[0].current_tyre_new is False

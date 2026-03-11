@@ -134,6 +134,7 @@ class LiveTimingState:
                     "best_lap_time": _metric_timedelta(best_lap_metric),
                     "current_sectors_metrics": current_sector_metrics,
                     "best_sectors_metrics": best_sector_metrics,
+                    "current_mini_sector_statuses": _mini_sector_triplet(timing.get("Sectors")),
                     "current_sector_times": tuple(
                         _metric_timedelta(metric) for metric in current_sector_metrics
                     ),
@@ -217,6 +218,7 @@ class LiveTimingState:
                     used_tyre_sets=row["used_tyre_sets"],
                     used_tyre_compounds=row["used_tyre_compounds"],
                     used_tyre_stints=row["used_tyre_stints"],
+                    current_mini_sector_statuses=row["current_mini_sector_statuses"],
                 )
             )
 
@@ -569,6 +571,34 @@ def _metric_triplet(value: Any) -> tuple[Any, Any, Any]:
     while len(padded) < 3:
         padded.append(None)
     return tuple(padded[:3])
+
+
+def _mini_sector_triplet(
+    value: Any,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    sectors = _metric_triplet(value)
+    return as_triplet(_segment_statuses(sector) for sector in sectors)
+
+
+def _segment_statuses(sector: Any) -> tuple[str, ...]:
+    segment_items = _ordered_items(_as_dict(sector).get("Segments"))
+    return tuple(_segment_status(segment) for segment in segment_items)
+
+
+def _segment_status(segment: Any) -> str:
+    raw_status = _coerce_int(_as_dict(segment).get("Status"))
+    if raw_status is None:
+        return "-"
+
+    if raw_status & 2:
+        return "P"
+    if raw_status & 1:
+        return "G"
+    if raw_status & (4 | 16 | 32 | 512):
+        return "R"
+    if raw_status & 2048 or raw_status:
+        return "Y"
+    return "-"
 
 
 def _ordered_items(value: Any) -> list[Any]:

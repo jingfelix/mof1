@@ -29,10 +29,10 @@ UTC = timezone.utc
 
 class F1TimingApp(App[None]):
     CSS_PATH = "app.tcss"
-    DEFAULT_TEAM_DISPLAY_MODE = "names"
+    DEFAULT_TEAM_DISPLAY_MODE = "hide"
     TEAM_DISPLAY_OPTIONS = [
-        ("Team names", "names"),
-        ("Color swatches", "colors"),
+        ("Hide team names", "hide"),
+        ("Show team names", "show"),
     ]
     BINDINGS = [
         Binding("r", "refresh_current", "Refresh Current"),
@@ -507,7 +507,7 @@ class F1TimingApp(App[None]):
         self.query_one(f"#{target}-drivers-scroll", VerticalScroll).loading = loading
 
     def _apply_team_display_mode(self, mode: str, *, notify: bool = False) -> None:
-        if mode not in {"names", "colors"}:
+        if mode not in {"show", "hide"}:
             return
 
         self.team_display_mode = mode
@@ -549,7 +549,7 @@ class F1TimingApp(App[None]):
 
     @staticmethod
     def _team_display_label(mode: str) -> str:
-        return "color swatches" if mode == "colors" else "team names"
+        return "team names" if mode == "show" else "swatches only"
 
     def on_resize(self) -> None:
         if self.current_snapshot is not None:
