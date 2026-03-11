@@ -1,4 +1,4 @@
-from .core.models import (
+from .models import (
     BootstrapPayload,
     CurrentContext,
     DriverSnapshot,

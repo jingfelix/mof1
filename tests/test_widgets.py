@@ -5,8 +5,8 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from mof1.models import DriverSnapshot, SessionSnapshot
-from mof1.widgets import (
+from mof1.core.models import DriverSnapshot, SessionSnapshot
+from mof1.ui.render import (
     _driver_identity,
     _mini_sector_strip,
     _summary_line_renderable,

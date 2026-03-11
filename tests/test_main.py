@@ -4,8 +4,8 @@ from typing import Any, cast
 
 from textual.widgets import Static
 
-from mof1.main import F1TimingApp
-from mof1.models import (
+from mof1.app import F1TimingApp
+from mof1.core.models import (
     CurrentContext,
     DriverSnapshot,
     EventOption,

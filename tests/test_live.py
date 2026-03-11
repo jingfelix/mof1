@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from mof1.live import LiveTimingState
+from mof1.live_timing.client import LiveTimingState
 
 UTC = timezone.utc
 

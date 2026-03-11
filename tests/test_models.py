@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from mof1.models import DriverSnapshot, SessionSelection, format_timedelta, split_drivers
-from mof1.service import FastF1Service
+from mof1.core.models import DriverSnapshot, SessionSelection, format_timedelta, split_drivers
+from mof1.data.fastf1_service import FastF1Service
 
 UTC = timezone.utc
 
