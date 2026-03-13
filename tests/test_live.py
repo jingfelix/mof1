@@ -218,6 +218,26 @@ def test_live_timing_snapshot_builds_current_panel_data() -> None:
     )
 
     snapshot = state.build_snapshot()
+    assert snapshot is not None
+    assert snapshot.live_clock_deadline_utc == datetime(2026, 3, 9, 11, 24, 30, tzinfo=UTC)
+
+
+def test_live_clock_deadline_tracks_clock_topic_timestamp_only() -> None:
+    state = LiveTimingState()
+    state.apply_snapshot(
+        _base_live_payload(),
+        received_at_utc=datetime(2026, 3, 9, 11, 0, tzinfo=UTC),
+    )
+    state.apply_topic(
+        "TimingData",
+        {"Lines": {"1": {"Position": "1"}}},
+        received_at_utc=datetime(2026, 3, 9, 11, 0, 10, tzinfo=UTC),
+    )
+
+    snapshot = state.build_snapshot()
+
+    assert snapshot is not None
+    assert snapshot.live_clock_deadline_utc == datetime(2026, 3, 9, 11, 24, 30, tzinfo=UTC)
 
     assert snapshot is not None
     assert snapshot.title == "2026 Australian Grand Prix"

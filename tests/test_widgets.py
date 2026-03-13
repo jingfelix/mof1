@@ -245,3 +245,23 @@ def test_render_summary_uses_structured_rows() -> None:
     assert isinstance(body[3], Table)
     assert isinstance(body[4], Table)
     assert isinstance(body[5], Table)
+
+
+def test_render_summary_updates_live_remaining_from_deadline() -> None:
+    snapshot = SessionSnapshot(
+        title="2026 Australian Grand Prix",
+        subtitle="Race | 2026-03-08 05:00 UTC",
+        badge="STARTED",
+        note="Live timing feed | Updated at 2026-03-09 11:00 UTC.",
+        summary_lines=("Session: Started | Track: AllClear | Remain 00:24:30 | Laps 18/58 (-40)",),
+        drivers=(),
+        loaded_at_utc=datetime(2026, 3, 9, 11, 0, tzinfo=UTC),
+        live_clock_deadline_utc=datetime(2026, 3, 9, 11, 24, 30, tzinfo=UTC),
+    )
+
+    panel = render_summary(snapshot, now_utc=datetime(2026, 3, 9, 11, 0, 45, tzinfo=UTC))
+    body = cast(Group, panel.renderable).renderables
+    status_row = cast(Table, body[2])
+    plains = [cast(Text, cell).plain for column in status_row.columns for cell in column._cells]
+
+    assert any("REMAIN" in item and "00:23:45" in item for item in plains)

@@ -32,6 +32,9 @@ def test_refresh_settings_text_mentions_history_loading() -> None:
 
 class _FakeService:
     def __init__(self) -> None:
+        self.current_context_calls = 0
+        self.load_session_snapshot_calls = 0
+        self.run_live_timing_calls = 0
         self.selection = SessionSelection(
             key="2026:1:Practice 1",
             year=2026,
@@ -69,6 +72,7 @@ class _FakeService:
         return (2026,)
 
     def current_context(self) -> CurrentContext:
+        self.current_context_calls += 1
         return CurrentContext(
             target=self.selection,
             latest_started=self.selection,
@@ -78,7 +82,11 @@ class _FakeService:
         )
 
     def load_session_snapshot(self, *_args, **_kwargs) -> SessionSnapshot:
+        self.load_session_snapshot_calls += 1
         return self.snapshot
+
+    def run_live_timing(self, *_args, **_kwargs) -> None:
+        self.run_live_timing_calls += 1
 
     def list_events(self, year: int):
         return (
@@ -108,5 +116,22 @@ def test_app_mounts_with_live_disabled() -> None:
             assert app.history_snapshot is not None
             settings = app.query_one("#settings-summary", Static)
             assert "anonymous F1 live timing feed" in str(settings.render())
+
+    asyncio.run(run())
+
+
+def test_app_mounts_with_live_enabled_without_fastf1_current_bootstrap() -> None:
+    async def run() -> None:
+        service = cast(Any, _FakeService())
+        app = F1TimingApp(service=service, enable_live_current=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert service.current_context_calls == 0
+            assert service.load_session_snapshot_calls == 1
+            assert service.run_live_timing_calls == 1
+            assert app.current_snapshot is None
+            assert app.history_snapshot is not None
+            current_summary = app.query_one("#current-summary", Static)
+            assert "Connecting current live timing feed" in str(current_summary.render())
 
     asyncio.run(run())

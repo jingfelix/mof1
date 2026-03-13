@@ -43,6 +43,7 @@ _LIVE_TOPICS = (
 @dataclass
 class LiveTimingState:
     topics: dict[str, Any] = field(default_factory=dict)
+    topic_received_at_utc: dict[str, datetime] = field(default_factory=dict)
     received_at_utc: datetime | None = None
 
     def apply_snapshot(
@@ -54,8 +55,10 @@ class LiveTimingState:
     def apply_topic(
         self, topic: str, data: Any, *, received_at_utc: datetime | None = None
     ) -> None:
+        applied_at_utc = received_at_utc or datetime.now(UTC)
         self.topics[topic] = _deep_merge(self.topics.get(topic), data)
-        self.received_at_utc = received_at_utc or datetime.now(UTC)
+        self.topic_received_at_utc[topic] = applied_at_utc
+        self.received_at_utc = applied_at_utc
 
     def build_snapshot(self) -> SessionSnapshot | None:
         session_info = _as_dict(self.topics.get("SessionInfo"))
@@ -246,6 +249,12 @@ class LiveTimingState:
             drivers=tuple(drivers),
             loaded_at_utc=self.received_at_utc or datetime.now(UTC),
             error=None,
+            live_clock_deadline_utc=_clock_deadline_utc(
+                extrapolated_clock=_as_dict(self.topics.get("ExtrapolatedClock")),
+                received_at_utc=self.topic_received_at_utc.get("ExtrapolatedClock")
+                or self.received_at_utc
+                or datetime.now(UTC),
+            ),
         )
 
 
@@ -469,6 +478,20 @@ def _summary_lines(
         lines.append("Live timing feed connected, waiting for session data.")
 
     return tuple(lines[:4])
+
+
+def _clock_deadline_utc(
+    *,
+    extrapolated_clock: dict[str, Any],
+    received_at_utc: datetime,
+) -> datetime | None:
+    remaining = _non_empty_text(extrapolated_clock.get("Remaining"))
+    if remaining is None:
+        return None
+    delta = _parse_live_timedelta(remaining)
+    if delta is None:
+        return None
+    return received_at_utc + delta
 
 
 def _best_lap_row(raw_rows: list[dict[str, Any]]) -> dict[str, Any] | None:

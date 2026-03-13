@@ -76,6 +76,7 @@ class SessionSnapshot:
     drivers: tuple[DriverSnapshot, ...]
     loaded_at_utc: datetime
     error: str | None = None
+    live_clock_deadline_utc: datetime | None = None
 
 
 @dataclass(frozen=True)

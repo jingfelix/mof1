@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import re
+from datetime import datetime, timedelta, timezone
 
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -8,6 +10,8 @@ from rich.table import Table
 from rich.text import Text
 
 from ..core.models import DriverSnapshot, SessionSnapshot
+
+UTC = timezone.utc
 
 TEAM_COLOR_MAP: dict[str, tuple[str, ...]] = {
     "mclaren": ("#FF8000",),
@@ -32,15 +36,18 @@ TYRE_STYLE_MAP: dict[str, str] = {
 }
 
 
-def render_summary(snapshot: SessionSnapshot) -> Panel:
+def render_summary(
+    snapshot: SessionSnapshot,
+    *,
+    now_utc: datetime | None = None,
+) -> Panel:
+    summary_lines = _display_summary_lines(snapshot, now_utc=now_utc)
     renderables: list[RenderableType] = [
         Text(snapshot.subtitle, style="bold white"),
         _summary_meta(snapshot),
     ]
-    renderables.extend(_summary_line_renderable(line) for line in snapshot.summary_lines)
-    if snapshot.error and not any(
-        line.startswith("Load error:") for line in snapshot.summary_lines
-    ):
+    renderables.extend(_summary_line_renderable(line) for line in summary_lines)
+    if snapshot.error and not any(line.startswith("Load error:") for line in summary_lines):
         renderables.append(_summary_alert_line(snapshot.error))
     body = Group(*renderables)
     border_style = "red" if snapshot.error else "bright_blue"
@@ -385,6 +392,42 @@ def _summary_meta(snapshot: SessionSnapshot) -> Text:
     meta.append("  ")
     meta.append(snapshot.note, style="dim #90a4b8")
     return meta
+
+
+def _display_summary_lines(
+    snapshot: SessionSnapshot,
+    *,
+    now_utc: datetime | None = None,
+) -> tuple[str, ...]:
+    if snapshot.live_clock_deadline_utc is None:
+        return snapshot.summary_lines
+
+    reference = now_utc or datetime.now(UTC)
+    return tuple(
+        _with_live_remaining(line, snapshot.live_clock_deadline_utc, reference)
+        for line in snapshot.summary_lines
+    )
+
+
+def _with_live_remaining(line: str, deadline_utc: datetime, now_utc: datetime) -> str:
+    if "Remain " not in line:
+        return line
+
+    parts = line.split(" | ")
+    updated = [
+        f"Remain {_format_remaining(deadline_utc - now_utc)}"
+        if part.startswith("Remain ")
+        else part
+        for part in parts
+    ]
+    return " | ".join(updated)
+
+
+def _format_remaining(value: timedelta) -> str:
+    total_seconds = max(math.ceil(value.total_seconds()), 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def _summary_line_renderable(line: str) -> Text | Table:

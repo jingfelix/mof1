@@ -57,6 +57,9 @@ class F1TimingApp(App[None]):
         self.current_context: CurrentContext | None = None
         self.history_events: dict[str, EventOption] = {}
         self.history_sessions: dict[str, SessionSelection] = {}
+        self._history_year_value: int | None = None
+        self._history_event_value: str | None = None
+        self._history_session_value: str | None = None
         self.current_snapshot: SessionSnapshot | None = None
         self.history_snapshot: SessionSnapshot | None = None
         self._current_live_thread: Thread | None = None
@@ -120,21 +123,33 @@ class F1TimingApp(App[None]):
 
     def on_mount(self) -> None:
         self.title = "mof1"
+        self.set_interval(1.0, self._tick_current_summary)
         self._set_status(None)
         self.query_one("#settings-summary", Static).update(
             self._refresh_settings_text(team_display_mode=self.team_display_mode)
         )
 
-        self._render_message(
-            "current",
-            "Loading the latest session from FastF1...",
+        current_message = (
+            "Connecting current live timing feed..."
+            if self.enable_live_current
+            else "Loading the latest session from FastF1..."
         )
+        self._render_message("current", current_message)
         self._render_message(
             "history",
             "Loading the default historical session...",
         )
         self._set_driver_loading("current", True)
         self._set_driver_loading("history", True)
+
+        if self.enable_live_current:
+            self._restart_current_live_feed(manual=False)
+            self._start_background_task(
+                name="history-bootstrap",
+                group="bootstrap",
+                work=self._load_history_bootstrap,
+            )
+            return
 
         self._start_background_task(
             name="bootstrap",
@@ -174,10 +189,16 @@ class F1TimingApp(App[None]):
 
         if self._history_syncing or self._bootstrapping:
             return
+        if not self._history_ready and event.select.id in {
+            "history-year",
+            "history-event",
+            "history-session",
+        }:
+            return
 
         if event.select.id == "history-year":
             year = event.value
-            if not isinstance(year, int):
+            if not isinstance(year, int) or year == self._history_year_value:
                 return
             self._set_driver_loading("history", True)
             self._set_status(f"Loading season {year}")
@@ -188,7 +209,11 @@ class F1TimingApp(App[None]):
             )
         elif event.select.id == "history-event":
             event_key = event.value
-            if event_key == self.LOADING_VALUE or not isinstance(event_key, str):
+            if (
+                event_key == self.LOADING_VALUE
+                or not isinstance(event_key, str)
+                or event_key == self._history_event_value
+            ):
                 return
             year = self.query_one("#history-year", Select).value
             if not isinstance(year, int):
@@ -202,7 +227,11 @@ class F1TimingApp(App[None]):
             )
         elif event.select.id == "history-session":
             session_key = event.value
-            if session_key == self.LOADING_VALUE or not isinstance(session_key, str):
+            if (
+                session_key == self.LOADING_VALUE
+                or not isinstance(session_key, str)
+                or session_key == self._history_session_value
+            ):
                 return
             selection = self.history_sessions.get(session_key)
             if selection is None:
@@ -241,6 +270,10 @@ class F1TimingApp(App[None]):
             history_session_key=history_session_key,
             history_snapshot=history_snapshot,
         )
+
+    def _load_history_bootstrap(self) -> HistoryCatalogPayload:
+        history_year = self.service.available_years()[0]
+        return self._load_history_catalog(history_year)
 
     def _load_history_catalog(self, year: int) -> HistoryCatalogPayload:
         events = self.service.list_events(year)
@@ -305,20 +338,25 @@ class F1TimingApp(App[None]):
         event_select = self.query_one("#history-event", Select)
         session_select = self.query_one("#history-session", Select)
 
-        self._history_syncing = True
-        try:
-            year_select.value = payload.history_year
-            self.history_events = {event.key: event for event in payload.history_events}
-            event_select.set_options([(event.label, event.key) for event in payload.history_events])
-            event_select.value = payload.history_event_key
+        with self.prevent(Select.Changed):
+            self._history_syncing = True
+            try:
+                year_select.value = payload.history_year
+                self.history_events = {event.key: event for event in payload.history_events}
+                event_select.set_options(
+                    [(event.label, event.key) for event in payload.history_events]
+                )
+                event_select.value = payload.history_event_key
 
-            self.history_sessions = {session.key: session for session in payload.history_sessions}
-            session_select.set_options(
-                [(session.label, session.key) for session in payload.history_sessions]
-            )
-            session_select.value = payload.history_session_key
-        finally:
-            self._history_syncing = False
+                self.history_sessions = {
+                    session.key: session for session in payload.history_sessions
+                }
+                session_select.set_options(
+                    [(session.label, session.key) for session in payload.history_sessions]
+                )
+                session_select.value = payload.history_session_key
+            finally:
+                self._history_syncing = False
 
         self._bootstrapping = False
         self._apply_history_snapshot(payload.history_snapshot)
@@ -331,6 +369,31 @@ class F1TimingApp(App[None]):
         self._render_snapshot("current", snapshot)
         self._set_driver_loading("current", False)
 
+    def _apply_history_bootstrap(self, payload: HistoryCatalogPayload) -> None:
+        event_select = self.query_one("#history-event", Select)
+        session_select = self.query_one("#history-session", Select)
+
+        self.history_events = {event.key: event for event in payload.events}
+        self.history_sessions = {session.key: session for session in payload.sessions}
+
+        with self.prevent(Select.Changed):
+            self._history_syncing = True
+            try:
+                event_select.set_options([(event.label, event.key) for event in payload.events])
+                event_select.value = payload.event_key
+                session_select.set_options(
+                    [(session.label, session.key) for session in payload.sessions]
+                )
+                session_select.value = payload.session_key
+            finally:
+                self._history_syncing = False
+
+        self._history_year_value = payload.year
+        self._history_event_value = payload.event_key
+        self._history_session_value = payload.session_key
+        self._bootstrapping = False
+        self._apply_history_snapshot(payload.snapshot)
+
     def _apply_history_catalog(self, payload: HistoryCatalogPayload) -> None:
         event_select = self.query_one("#history-event", Select)
         session_select = self.query_one("#history-session", Select)
@@ -338,32 +401,40 @@ class F1TimingApp(App[None]):
         self.history_events = {event.key: event for event in payload.events}
         self.history_sessions = {session.key: session for session in payload.sessions}
 
-        self._history_syncing = True
-        try:
-            event_select.set_options([(event.label, event.key) for event in payload.events])
-            event_select.value = payload.event_key
-            session_select.set_options(
-                [(session.label, session.key) for session in payload.sessions]
-            )
-            session_select.value = payload.session_key
-        finally:
-            self._history_syncing = False
+        with self.prevent(Select.Changed):
+            self._history_syncing = True
+            try:
+                event_select.set_options([(event.label, event.key) for event in payload.events])
+                event_select.value = payload.event_key
+                session_select.set_options(
+                    [(session.label, session.key) for session in payload.sessions]
+                )
+                session_select.value = payload.session_key
+            finally:
+                self._history_syncing = False
 
+        self._history_year_value = payload.year
+        self._history_event_value = payload.event_key
+        self._history_session_value = payload.session_key
         self._apply_history_snapshot(payload.snapshot)
 
     def _apply_history_event(self, payload: HistoryEventPayload) -> None:
         session_select = self.query_one("#history-session", Select)
         self.history_sessions = {session.key: session for session in payload.sessions}
 
-        self._history_syncing = True
-        try:
-            session_select.set_options(
-                [(session.label, session.key) for session in payload.sessions]
-            )
-            session_select.value = payload.session_key
-        finally:
-            self._history_syncing = False
+        with self.prevent(Select.Changed):
+            self._history_syncing = True
+            try:
+                session_select.set_options(
+                    [(session.label, session.key) for session in payload.sessions]
+                )
+                session_select.value = payload.session_key
+            finally:
+                self._history_syncing = False
 
+        self._history_year_value = payload.year
+        self._history_event_value = payload.event_key
+        self._history_session_value = payload.session_key
         self._apply_history_snapshot(payload.snapshot)
 
     def _apply_history_snapshot(self, snapshot: SessionSnapshot) -> None:
@@ -442,6 +513,8 @@ class F1TimingApp(App[None]):
             return
         if name == "bootstrap" and isinstance(result, BootstrapPayload):
             self._apply_bootstrap(result)
+        elif name == "history-bootstrap" and isinstance(result, HistoryCatalogPayload):
+            self._apply_history_bootstrap(result)
         elif name == "current-refresh" and isinstance(result, SessionSnapshot):
             self._apply_current_snapshot(result)
         elif name == "history-year" and isinstance(result, HistoryCatalogPayload):
@@ -466,6 +539,13 @@ class F1TimingApp(App[None]):
                 self._apply_current_snapshot(self.current_snapshot)
             elif not self._current_ready:
                 self._render_message("current", message)
+            if self.history_snapshot is not None:
+                self._apply_history_snapshot(self.history_snapshot)
+            elif not self._history_ready:
+                self._render_message("history", message)
+        elif worker_name == "history-bootstrap":
+            self._bootstrapping = False
+            self._set_driver_loading("history", False)
             if self.history_snapshot is not None:
                 self._apply_history_snapshot(self.history_snapshot)
             elif not self._history_ready:
@@ -559,7 +639,7 @@ class F1TimingApp(App[None]):
 
     def _render_snapshot(self, target: str, snapshot: SessionSnapshot) -> None:
         drivers_widget = self.query_one(f"#{target}-drivers", Static)
-        self.query_one(f"#{target}-summary", Static).update(render_summary(snapshot))
+        self._render_summary(target, snapshot)
         panel_width = drivers_widget.size.width or max(1, self.size.width - 8)
         compact = self._use_compact_driver_layout(panel_width)
         driver_panel = render_driver_panel(
@@ -569,6 +649,19 @@ class F1TimingApp(App[None]):
             team_display_mode=self.team_display_mode,
         )
         drivers_widget.update(driver_panel)
+
+    def _render_summary(self, target: str, snapshot: SessionSnapshot) -> None:
+        self.query_one(f"#{target}-summary", Static).update(render_summary(snapshot))
+
+    def _tick_current_summary(self) -> None:
+        if self._shutting_down:
+            return
+
+        snapshot = self.current_snapshot
+        if snapshot is None or snapshot.live_clock_deadline_utc is None:
+            return
+
+        self._render_summary("current", snapshot)
 
     @staticmethod
     def _use_compact_driver_layout(panel_width: int) -> bool:
