@@ -1,6 +1,6 @@
 [project]
 name = "mof1"
-version = "0.1.0"
+version = "0.1.1"
 description = "mof1: a Textual TUI for current and historical Formula 1 session status."
 readme = "README.md"
 authors = [
